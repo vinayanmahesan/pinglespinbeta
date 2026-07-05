@@ -152,8 +152,12 @@ fun Context.findActivity(): Activity? {
   return null
 }
 
+var mockFoldableDeviceGlobal by androidx.compose.runtime.mutableStateOf(false)
+var mockFoldedStateGlobal by androidx.compose.runtime.mutableStateOf(false)
+
 @Composable
 fun isFoldableDevice(): Boolean {
+  if (mockFoldableDeviceGlobal) return true
   val context = LocalContext.current
   val activity = remember(context) { context.findActivity() } ?: return false
   
@@ -177,6 +181,7 @@ fun isFoldableDevice(): Boolean {
 
 @Composable
 fun isFlipStyleFoldable(): Boolean {
+  if (mockFoldableDeviceGlobal) return true
   val context = LocalContext.current
   val activity = remember(context) { context.findActivity() } ?: return false
   
@@ -247,6 +252,9 @@ fun rememberHingeAngle(): Float? {
 
 @Composable
 fun isFoldedState(threshold: Float): Boolean {
+  if (mockFoldableDeviceGlobal) {
+    return mockFoldedStateGlobal
+  }
   val isFoldable = isFoldableDevice()
   if (!isFoldable) return false
 
@@ -554,6 +562,130 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
           onCreateDebugScore = { viewModel.saveDebugScore(it) },
           onBackClicked = { viewModel.setScreen(Screen.HOME) }
         )
+      }
+
+      if (isDebugUnlocked) {
+        Box(
+          modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(16.dp),
+          contentAlignment = Alignment.TopEnd
+        ) {
+          var showExpandedControls by remember { mutableStateOf(false) }
+          
+          if (showExpandedControls) {
+            Column(
+              modifier = Modifier
+                .background(Color(0xE6121212), RoundedCornerShape(16.dp))
+                .border(1.dp, Color(0xFF00FFCC).copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+                .padding(12.dp)
+                .width(160.dp),
+              verticalArrangement = Arrangement.spacedBy(8.dp),
+              horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+              androidx.compose.material3.Text(
+                text = "DEV FOLD MODE",
+                style = TextStyle(
+                  color = Color(0xFF00FFCC),
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold,
+                  letterSpacing = 1.sp
+                )
+              )
+              
+              listOf(
+                "STANDARD" to (false to false),
+                "OPENED" to (true to false),
+                "FOLDED" to (true to true)
+              ).forEach { (label, states) ->
+                val (mockDevice, mockFolded) = states
+                val isSelected = (mockFoldableDeviceGlobal == mockDevice && (!mockDevice || mockFoldedStateGlobal == mockFolded))
+                
+                Box(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .background(
+                      if (isSelected) Color(0xFF00FFCC).copy(alpha = 0.2f) else Color.Transparent,
+                      RoundedCornerShape(8.dp)
+                    )
+                    .border(
+                      width = 1.dp,
+                      color = if (isSelected) Color(0xFF00FFCC) else Color.White.copy(alpha = 0.15f),
+                      shape = RoundedCornerShape(8.dp)
+                    )
+                    .clickable {
+                      mockFoldableDeviceGlobal = mockDevice
+                      mockFoldedStateGlobal = mockFolded
+                    },
+                  contentAlignment = Alignment.Center
+                ) {
+                  androidx.compose.material3.Text(
+                    text = label,
+                    style = TextStyle(
+                      color = if (isSelected) Color(0xFF00FFCC) else Color.White.copy(alpha = 0.6f),
+                      fontSize = 10.sp,
+                      fontWeight = FontWeight.Bold,
+                      letterSpacing = 0.5.sp
+                    )
+                  )
+                }
+              }
+              
+              // Collapse button
+              androidx.compose.material3.Text(
+                text = "MINIMIZE",
+                style = TextStyle(
+                  color = Color.White.copy(alpha = 0.4f),
+                  fontSize = 9.sp,
+                  fontWeight = FontWeight.Bold,
+                  letterSpacing = 0.5.sp
+                ),
+                modifier = Modifier
+                  .clickable { showExpandedControls = false }
+                  .padding(top = 4.dp)
+              )
+            }
+          } else {
+            // Minimized Pill
+            val currentModeLabel = when {
+              !mockFoldableDeviceGlobal -> "DEV FOLD: OFF"
+              !mockFoldedStateGlobal -> "DEV: OPENED"
+              else -> "DEV: FOLDED"
+            }
+            val badgeColor = when {
+              !mockFoldableDeviceGlobal -> Color.White.copy(alpha = 0.3f)
+              !mockFoldedStateGlobal -> Color(0xFF0078D7)
+              else -> Color(0xFF00FFCC)
+            }
+            
+            Row(
+              modifier = Modifier
+                .background(Color(0xE6121212), RoundedCornerShape(20.dp))
+                .border(1.dp, badgeColor.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
+                .clickable { showExpandedControls = true }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+              Box(
+                modifier = Modifier
+                  .size(8.dp)
+                  .background(badgeColor, androidx.compose.foundation.shape.CircleShape)
+              )
+              androidx.compose.material3.Text(
+                text = currentModeLabel,
+                style = TextStyle(
+                  color = Color.White,
+                  fontSize = 10.sp,
+                  fontWeight = FontWeight.Bold,
+                  letterSpacing = 0.5.sp
+                )
+              )
+            }
+          }
+        }
       }
     }
   }
@@ -2698,7 +2830,7 @@ fun ManualPlayScreen(
     if (transitionProgress > 0.01f) {
       var discAngle by remember { mutableFloatStateOf(0f) }
 
-      Column(
+      Box(
         modifier = Modifier
           .align(BiasAlignment(0f, 1.15f - 0.65f * transitionProgress)) // dynamic entry slide up
           .offset(x = discOffsetXState.dp, y = discOffsetYState.dp)
@@ -2707,43 +2839,30 @@ fun ManualPlayScreen(
             scaleY = discScaleState,
             rotationZ = discTiltState,
             alpha = transitionProgress
-          ),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-      ) {
-        androidx.compose.material3.Text(
-          text = "PINGLE DISC CONTROLLER",
-          style = TextStyle(
-            fontFamily = FontFamily.SansSerif,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.LightGray.copy(alpha = 0.8f),
-            letterSpacing = 1.5.sp
-          ),
-          modifier = Modifier.padding(bottom = 8.dp)
-        )
+          )
+          .size(170.dp)
+          .pointerInput(Unit) {
+            detectDragGestures { change, dragAmount ->
+              change.consume()
+              // Direct rotation mapping
+              val delta = dragAmount.x + dragAmount.y
+              discAngle = (discAngle + delta) % 360f
+              rotation = (rotation + delta) % 360f
 
+              // Direct velocity bump with zero friction decay
+              velocity += delta * 0.2f
+              velocity = velocity.coerceIn(-80f, 80f)
+            }
+          },
+        contentAlignment = Alignment.Center
+      ) {
+        // Flat grey disc (CD) body
         Box(
           modifier = Modifier
-            .size(170.dp)
-            .border(3.dp, Color.Gray, androidx.compose.foundation.shape.CircleShape)
-            .background(Color.DarkGray.copy(alpha = 0.35f), androidx.compose.foundation.shape.CircleShape)
-            .pointerInput(Unit) {
-              detectDragGestures { change, dragAmount ->
-                change.consume()
-                // Direct rotation mapping
-                val delta = dragAmount.x + dragAmount.y
-                discAngle = (discAngle + delta) % 360f
-                rotation = (rotation + delta) % 360f
-
-                // Direct velocity bump with zero friction decay
-                velocity += delta * 0.2f
-                velocity = velocity.coerceIn(-80f, 80f)
-              }
-            },
-          contentAlignment = Alignment.Center
+            .fillMaxSize()
+            .background(Color(0xFFB0B0B0), androidx.compose.foundation.shape.CircleShape)
+            .border(2.dp, Color(0xFF8E8E8E), androidx.compose.foundation.shape.CircleShape)
         ) {
-          // CD/Grooves graphic that rotates
           androidx.compose.foundation.Canvas(
             modifier = Modifier
               .fillMaxSize()
@@ -2752,67 +2871,30 @@ fun ManualPlayScreen(
             val r = size.minDimension / 2f
             val ctr = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
 
+            // CD shine reflection stroke (white with alpha)
             drawCircle(
-              color = Color.LightGray.copy(alpha = 0.8f),
-              radius = r,
+              color = Color.White.copy(alpha = 0.15f),
+              radius = r * 0.85f,
               style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4f)
             )
 
-            drawCircle(
-              color = Color.Gray.copy(alpha = 0.35f),
-              radius = r * 0.8f,
-              style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
-            )
-            drawCircle(
-              color = Color.Gray.copy(alpha = 0.35f),
-              radius = r * 0.6f,
-              style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
-            )
-            drawCircle(
-              color = Color.Gray.copy(alpha = 0.35f),
-              radius = r * 0.4f,
-              style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2f)
-            )
-
+            // Red line from the middle to the end
             drawLine(
-              color = Color.LightGray.copy(alpha = 0.6f),
-              start = androidx.compose.ui.geometry.Offset(ctr.x - r, ctr.y),
+              color = Color(0xFFFF3B30),
+              start = androidx.compose.ui.geometry.Offset(ctr.x + r * 0.25f, ctr.y),
               end = androidx.compose.ui.geometry.Offset(ctr.x + r, ctr.y),
-              strokeWidth = 3f
-            )
-
-            drawLine(
-              color = Color.LightGray.copy(alpha = 0.6f),
-              start = androidx.compose.ui.geometry.Offset(ctr.x, ctr.y - r),
-              end = androidx.compose.ui.geometry.Offset(ctr.x, ctr.y + r),
-              strokeWidth = 3f
-            )
-
-            drawCircle(
-              color = Color.Red,
-              radius = 8f,
-              center = androidx.compose.ui.geometry.Offset(ctr.x + r * 0.7f, ctr.y)
+              strokeWidth = 6f,
+              cap = androidx.compose.ui.graphics.StrokeCap.Round
             )
           }
-
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .border(2.dp, Color.LightGray, androidx.compose.foundation.shape.CircleShape)
-              .background(Color.Gray, androidx.compose.foundation.shape.CircleShape)
-          )
         }
 
-        Spacer(modifier = Modifier.height(6.dp))
-
-        androidx.compose.material3.Text(
-          text = "Frictionless direct-drive steering".uppercase(Locale.US),
-          style = TextStyle(
-            fontFamily = FontFamily.SansSerif,
-            fontSize = 9.sp,
-            color = Color.Gray,
-            letterSpacing = 1.sp
-          )
+        // Black circle in the middle (looks like a CD spindle hole)
+        Box(
+          modifier = Modifier
+            .size(42.dp)
+            .background(Color.Black, androidx.compose.foundation.shape.CircleShape)
+            .border(1.5.dp, Color(0xFF6E6E6E), androidx.compose.foundation.shape.CircleShape)
         )
       }
     }
@@ -3801,7 +3883,7 @@ fun PinguiGameEditScreen(
     val showDisc = currentConfig == "psm" || currentConfig == "unfolded_psm" || currentConfig == "folded_psm"
     if (showDisc) {
       val isDiscSelected = selectedElement == "fold disc"
-      Column(
+      Box(
         modifier = Modifier
           .align(Alignment.BottomCenter)
           .padding(bottom = 260.dp) // position next to spotify
@@ -3823,40 +3905,49 @@ fun PinguiGameEditScreen(
             selectedElement = "fold disc"
           }
           .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+        contentAlignment = Alignment.Center
       ) {
-        androidx.compose.material3.Text(
-          text = "PINGLE DISC CONTROLLER",
-          style = TextStyle(
-            fontFamily = FontFamily.SansSerif,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (isDiscSelected) Color(0xFF00FFCC) else Color.LightGray.copy(alpha = 0.6f),
-            letterSpacing = 1.5.sp
-          ),
-          modifier = Modifier.padding(bottom = 8.dp)
-        )
-
+        // Flat grey disc (CD) body
         Box(
           modifier = Modifier
             .size(120.dp)
+            .background(Color(0xFFB0B0B0), androidx.compose.foundation.shape.CircleShape)
             .border(
               width = if (isDiscSelected) 2.5.dp else 1.5.dp,
-              color = if (isDiscSelected) Color(0xFF00FFCC) else Color.Gray,
+              color = if (isDiscSelected) Color(0xFF00FFCC) else Color(0xFF8E8E8E),
               shape = androidx.compose.foundation.shape.CircleShape
-            )
-            .background(Color.DarkGray.copy(alpha = 0.35f), androidx.compose.foundation.shape.CircleShape),
+            ),
           contentAlignment = Alignment.Center
         ) {
+          androidx.compose.foundation.Canvas(
+            modifier = Modifier.fillMaxSize()
+          ) {
+            val r = size.minDimension / 2f
+            val ctr = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+
+            // CD shine reflection stroke (white with alpha)
+            drawCircle(
+              color = Color.White.copy(alpha = 0.15f),
+              radius = r * 0.85f,
+              style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4f)
+            )
+
+            // Red line from the middle to the end
+            drawLine(
+              color = Color(0xFFFF3B30),
+              start = androidx.compose.ui.geometry.Offset(ctr.x + r * 0.25f, ctr.y),
+              end = androidx.compose.ui.geometry.Offset(ctr.x + r, ctr.y),
+              strokeWidth = 5f,
+              cap = androidx.compose.ui.graphics.StrokeCap.Round
+            )
+          }
+
+          // Black circle in the middle (looks like a CD spindle hole)
           Box(
             modifier = Modifier
-              .size(80.dp)
-              .border(1.dp, Color.Gray.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
-          )
-          Box(
-            modifier = Modifier
-              .size(40.dp)
-              .border(1.dp, Color.Gray.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+              .size(30.dp) // ~25% of 120.dp is 30.dp
+              .background(Color.Black, androidx.compose.foundation.shape.CircleShape)
+              .border(1.dp, Color(0xFF6E6E6E), androidx.compose.foundation.shape.CircleShape)
           )
         }
       }
