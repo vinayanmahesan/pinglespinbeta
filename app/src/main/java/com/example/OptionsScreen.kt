@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -81,17 +82,20 @@ fun OptionsScreen(
   val easterSpaceStarsState by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBgState by viewModel.easterMatrixBg.collectAsState()
 
-  val anyEasterEggUnlocked = isRainbowNeonUnlocked || isMatrixBgUnlocked || isReverseSpinUnlocked || isSpaceStarsUnlocked
-  val visibleTabs = remember(isDebugUnlocked, anyEasterEggUnlocked) {
-    val list = mutableListOf("customisation", "special")
-    if (anyEasterEggUnlocked) {
-      list.add("easter eggs")
-    }
+  val visibleTabs = remember {
+    listOf("customisation", "special", "easter eggs", "debug", "request features")
+  }
+  var passwordInput by remember { mutableStateOf(if (isDebugUnlocked) "tetopearbro" else "") }
+  var codeInputText by remember { mutableStateOf("") }
+  var blankCount by remember { mutableIntStateOf(0) }
+  LaunchedEffect(isDebugUnlocked) {
     if (isDebugUnlocked) {
-      list.add("debug")
+      if (passwordInput != "tetopearbro") {
+        passwordInput = "tetopearbro"
+      }
+    } else {
+      passwordInput = ""
     }
-    list.add("request features")
-    list
   }
   val pagerState = rememberPagerState(
     initialPage = 0,
@@ -287,6 +291,57 @@ fun OptionsScreen(
                       )
                     }
                   }
+                }
+              }
+
+              // PINGUI Layout customisation row
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                  .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                  .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Column(modifier = Modifier.weight(1f)) {
+                  androidx.compose.material3.Text(
+                    text = "PINGUI",
+                    style = TextStyle(
+                      fontFamily = FontFamily.SansSerif,
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White,
+                      letterSpacing = 1.sp
+                    )
+                  )
+                  Spacer(modifier = Modifier.height(2.dp))
+                  androidx.compose.material3.Text(
+                    text = "Adjust sizes, locations & tilts",
+                    style = TextStyle(
+                      fontFamily = FontFamily.SansSerif,
+                      fontSize = 11.sp,
+                      color = Color.White.copy(alpha = 0.5f)
+                    )
+                  )
+                }
+
+                Box(
+                  modifier = Modifier
+                    .border(1.dp, Color(0xFF0078D7), RoundedCornerShape(8.dp))
+                    .clickable { viewModel.setScreen(Screen.PINGUI_SETUP) }
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                    .testTag("pingui_edit_button")
+                ) {
+                  androidx.compose.material3.Text(
+                    text = "EDIT",
+                    style = TextStyle(
+                      color = Color(0xFF0078D7),
+                      fontSize = 11.sp,
+                      fontWeight = FontWeight.Bold,
+                      letterSpacing = 1.sp
+                    )
+                  )
                 }
               }
 
@@ -697,12 +752,118 @@ fun OptionsScreen(
             }
           }
           "easter eggs" -> {
+            val invisiblePingleEnabledState by viewModel.invisiblePingleEnabled.collectAsState()
             Column(
               modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
               verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+              // Code Entry Card at the top of the easter eggs page
+              Card(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(16.dp))
+                  .testTag("codes_container_card"),
+                colors = CardDefaults.cardColors(
+                  containerColor = Color.White.copy(alpha = 0.03f)
+                ),
+                shape = RoundedCornerShape(16.dp)
+              ) {
+                Column(
+                  modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth(),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                  androidx.compose.material3.Text(
+                    text = "ENTER SECRET CODE",
+                    style = TextStyle(
+                      fontFamily = FontFamily.SansSerif,
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White.copy(alpha = 0.8f),
+                      letterSpacing = 2.sp
+                    )
+                  )
+
+                  androidx.compose.material3.OutlinedTextField(
+                    value = codeInputText,
+                    onValueChange = { codeInputText = it },
+                    label = { androidx.compose.material3.Text("Secret Code") },
+                    placeholder = { androidx.compose.material3.Text("Enter code...") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                      focusedBorderColor = Color.White,
+                      unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                      focusedLabelColor = Color.White,
+                      unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
+                      focusedTextColor = Color.White,
+                      unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("secret_code_input")
+                  )
+
+                  Button(
+                    onClick = {
+                      val cleanInput = codeInputText.trim()
+                      if (cleanInput.equals("Pride", ignoreCase = true)) {
+                        viewModel.setRainbowNeonUnlocked(true)
+                        viewModel.setEasterRainbowNeon(true)
+                        showToast(context, "Pride code activated! Rainbow tint unlocked and enabled.")
+                        codeInputText = ""
+                      } else if (cleanInput.isEmpty()) {
+                        blankCount++
+                        if (blankCount == 1) {
+                          showToast(context, "dude type something in")
+                        } else if (blankCount == 2) {
+                          showToast(context, "dawg there isn't anything here")
+                        } else {
+                          viewModel.setInvisiblePingleEnabled(true)
+                          showToast(context, "Invisible pingle unlocked! It's gone, and you can collect any time.")
+                        }
+                      } else {
+                        showToast(context, "Unknown code!")
+                      }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                      containerColor = Color.White.copy(alpha = 0.1f),
+                      contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("secret_code_enter_button")
+                      .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
+                  ) {
+                    androidx.compose.material3.Text(
+                      text = "ENTER",
+                      style = TextStyle(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                      )
+                    )
+                  }
+                }
+              }
+
+              androidx.compose.material3.Text(
+                text = "YOUR UNLOCKED EGGS",
+                style = TextStyle(
+                  fontFamily = FontFamily.SansSerif,
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White.copy(alpha = 0.6f),
+                  letterSpacing = 1.sp
+                )
+              )
+
               // Row helper for Easter egg item
               @Composable
               fun EasterEggItem(
@@ -805,6 +966,16 @@ fun OptionsScreen(
                   onCheckedChange = onEasterSpaceStarsChange
                 )
               }
+
+              if (blankCount >= 3 || invisiblePingleEnabledState) {
+                EasterEggItem(
+                  title = "Invisible Pingle",
+                  desc = "Secret code unlock: Pingle is completely hidden.",
+                  isUnlocked = true,
+                  isEnabled = invisiblePingleEnabledState,
+                  onCheckedChange = { viewModel.setInvisiblePingleEnabled(it) }
+                )
+              }
             }
           }
           "debug" -> {
@@ -814,152 +985,273 @@ fun OptionsScreen(
                 .verticalScroll(rememberScrollState()),
               verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-              androidx.compose.material3.Text(
-                text = "DEVELOPER COMMANDS",
-                style = TextStyle(
-                  fontFamily = FontFamily.SansSerif,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.Bold,
-                  color = Color.Red,
-                  letterSpacing = 1.sp
-                )
-              )
-
-              // Easter Egg override switches
-              Column(
+              Card(
                 modifier = Modifier
                   .fillMaxWidth()
-                  .border(1.dp, Color.Red.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                  .background(Color.Red.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                  .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                  .border(
+                    width = 1.dp,
+                    color = if (isDebugUnlocked) Color.Green.copy(alpha = 0.3f) else Color.Red.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(16.dp)
+                  )
+                  .testTag("debug_password_card"),
+                colors = CardDefaults.cardColors(
+                  containerColor = Color.White.copy(alpha = 0.05f)
+                ),
+                shape = RoundedCornerShape(16.dp)
               ) {
-                androidx.compose.material3.Text(
-                  text = "FORCE UNLOCK OVERRIDES",
-                  style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                )
-
-                val debugStates = listOf(
-                  Triple("Pinglemanualspin Mode", isManualUnlocked) { viewModel.unlockManual() },
-                  Triple("Reverse Spin Egg", isReverseSpinUnlocked) { viewModel.setReverseSpinUnlocked(true) },
-                  Triple("Matrix Rain Egg", isMatrixBgUnlocked) { viewModel.setMatrixBgUnlocked(true) },
-                  Triple("Rainbow Neon Egg", isRainbowNeonUnlocked) { viewModel.setRainbowNeonUnlocked(true) },
-                  Triple("Cosmic Starfield Egg", isSpaceStarsUnlocked) { viewModel.setSpaceStarsUnlocked(true) }
-                )
-
-                debugStates.forEach { (label, flow, action) ->
+                Column(
+                  modifier = Modifier.padding(16.dp),
+                  verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                   Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
                     androidx.compose.material3.Text(
-                      text = label,
-                      style = TextStyle(color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
+                      text = "PASSWORD PROTECTION",
+                      style = TextStyle(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isDebugUnlocked) Color.Green else Color.Red,
+                        letterSpacing = 1.sp
+                      )
                     )
-
-                    Box(
-                      modifier = Modifier
-                        .border(
-                          width = 1.dp,
-                          color = if (flow) Color.Green.copy(alpha = 0.5f) else Color.Red.copy(alpha = 0.5f),
-                          shape = RoundedCornerShape(6.dp)
-                        )
-                        .clickable { action() }
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                    
+                    Row(
+                      verticalAlignment = Alignment.CenterVertically,
+                      horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                      Icon(
+                        imageVector = if (isDebugUnlocked) Icons.Default.LockOpen else Icons.Default.Lock,
+                        contentDescription = if (isDebugUnlocked) "Unlocked" else "Locked",
+                        tint = if (isDebugUnlocked) Color.Green else Color.Red,
+                        modifier = Modifier.size(20.dp)
+                      )
                       androidx.compose.material3.Text(
-                        text = if (flow) "UNLOCKED" else "LOCK",
+                        text = if (isDebugUnlocked) "UNLOCKED" else "LOCKED",
                         style = TextStyle(
-                          color = if (flow) Color.Green else Color.Red,
-                          fontSize = 9.sp,
-                          fontWeight = FontWeight.Bold
+                          fontSize = 11.sp,
+                          fontWeight = FontWeight.Bold,
+                          color = if (isDebugUnlocked) Color.Green else Color.Red
                         )
                       )
                     }
                   }
+
+                  androidx.compose.material3.OutlinedTextField(
+                    value = passwordInput,
+                    onValueChange = { newValue ->
+                      passwordInput = newValue
+                    },
+                    label = { androidx.compose.material3.Text("Password") },
+                    placeholder = { androidx.compose.material3.Text("Enter password") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                      focusedBorderColor = if (isDebugUnlocked) Color.Green else Color.Red,
+                      unfocusedBorderColor = Color.White.copy(alpha = 0.3f),
+                      focusedLabelColor = if (isDebugUnlocked) Color.Green else Color.Red,
+                      unfocusedLabelColor = Color.White.copy(alpha = 0.6f),
+                      focusedTextColor = Color.White,
+                      unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("debug_password_input")
+                  )
+
+                  Button(
+                    onClick = {
+                      if (isDebugUnlocked) {
+                        viewModel.setDebugUnlocked(false)
+                        passwordInput = ""
+                        showToast(context, "Developer menu locked.")
+                      } else {
+                        if (passwordInput == "tetopearbro") {
+                          viewModel.setDebugUnlocked(true)
+                          showToast(context, "Developer menu unlocked!")
+                        } else {
+                          showToast(context, "Incorrect password!")
+                        }
+                      }
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                      containerColor = if (isDebugUnlocked) Color.Green.copy(alpha = 0.15f) else Color.Red.copy(alpha = 0.15f),
+                      contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .testTag("debug_password_enter_button")
+                      .border(
+                        width = 1.dp,
+                        color = if (isDebugUnlocked) Color.Green else Color.Red,
+                        shape = RoundedCornerShape(10.dp)
+                      )
+                  ) {
+                    androidx.compose.material3.Text(
+                      text = if (isDebugUnlocked) "LOCK DEBUG" else "ENTER",
+                      style = TextStyle(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.sp
+                      )
+                    )
+                  }
                 }
               }
 
-              // Custom Score creator
-              Column(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .border(1.dp, Color.Red.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
-                  .background(Color.Red.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                  .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-              ) {
+              if (isDebugUnlocked) {
                 androidx.compose.material3.Text(
-                  text = "CUSTOM SCORE CREATOR (RED WATERMARK)",
-                  style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                  text = "DEVELOPER COMMANDS",
+                  style = TextStyle(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.Red,
+                    letterSpacing = 1.sp
+                  )
                 )
 
-                var debugScoreSeconds by remember { mutableFloatStateOf(60f) }
-
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.SpaceBetween,
-                  verticalAlignment = Alignment.CenterVertically
+                // Easter Egg override switches
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color.Red.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                    .background(Color.Red.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                  verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                   androidx.compose.material3.Text(
-                    text = "Duration to add:",
-                    style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    text = "FORCE UNLOCK OVERRIDES",
+                    style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                   )
-                  androidx.compose.material3.Text(
-                    text = formatDuration((debugScoreSeconds * 1000).toLong()),
-                    style = TextStyle(color = Color.Red, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+
+                  val debugStates = listOf(
+                    Triple("Pinglemanualspin Mode", isManualUnlocked) { viewModel.unlockManual() },
+                    Triple("Reverse Spin Egg", isReverseSpinUnlocked) { viewModel.setReverseSpinUnlocked(true) },
+                    Triple("Matrix Rain Egg", isMatrixBgUnlocked) { viewModel.setMatrixBgUnlocked(true) },
+                    Triple("Rainbow Neon Egg", isRainbowNeonUnlocked) { viewModel.setRainbowNeonUnlocked(true) },
+                    Triple("Cosmic Starfield Egg", isSpaceStarsUnlocked) { viewModel.setSpaceStarsUnlocked(true) }
                   )
+
+                  debugStates.forEach { (label, flow, action) ->
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.SpaceBetween,
+                      verticalAlignment = Alignment.CenterVertically
+                    ) {
+                      androidx.compose.material3.Text(
+                        text = label,
+                        style = TextStyle(color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
+                      )
+
+                      Box(
+                        modifier = Modifier
+                          .border(
+                            width = 1.dp,
+                            color = if (flow) Color.Green.copy(alpha = 0.5f) else Color.Red.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(6.dp)
+                          )
+                          .clickable { action() }
+                          .padding(horizontal = 10.dp, vertical = 4.dp)
+                      ) {
+                        androidx.compose.material3.Text(
+                          text = if (flow) "UNLOCKED" else "LOCK",
+                          style = TextStyle(
+                            color = if (flow) Color.Green else Color.Red,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold
+                          )
+                        )
+                      }
+                    }
+                  }
                 }
 
-                Slider(
-                  value = debugScoreSeconds,
-                  onValueChange = { debugScoreSeconds = it },
-                  valueRange = 5f..600f,
-                  colors = SliderDefaults.colors(
-                    thumbColor = Color.Red,
-                    activeTrackColor = Color.Red,
-                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                // Custom Score creator
+                Column(
+                  modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color.Red.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                    .background(Color.Red.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                    .padding(14.dp),
+                  verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                  androidx.compose.material3.Text(
+                    text = "CUSTOM SCORE CREATOR (RED WATERMARK)",
+                    style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                   )
-                )
 
+                  var debugScoreSeconds by remember { mutableFloatStateOf(60f) }
+
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    androidx.compose.material3.Text(
+                      text = "Duration to add:",
+                      style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+                    )
+                    androidx.compose.material3.Text(
+                      text = formatDuration((debugScoreSeconds * 1000).toLong()),
+                      style = TextStyle(color = Color.Red, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
+                    )
+                  }
+
+                  Slider(
+                    value = debugScoreSeconds,
+                    onValueChange = { debugScoreSeconds = it },
+                    valueRange = 5f..600f,
+                    colors = SliderDefaults.colors(
+                      thumbColor = Color.Red,
+                      activeTrackColor = Color.Red,
+                      inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                    )
+                  )
+
+                  Box(
+                    modifier = Modifier
+                      .fillMaxWidth()
+                      .border(1.dp, Color.Red, RoundedCornerShape(10.dp))
+                      .clickable {
+                        onCreateDebugScore((debugScoreSeconds * 1000).toLong())
+                        showToast(context, "Added custom score with db watermark!")
+                      }
+                      .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                  ) {
+                    androidx.compose.material3.Text(
+                      text = "CREATE DEBUG SCORE",
+                      style = TextStyle(color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    )
+                  }
+                }
+
+                // Reset Button
                 Box(
                   modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, Color.Red, RoundedCornerShape(10.dp))
+                    .border(1.dp, Color.Gray, RoundedCornerShape(10.dp))
                     .clickable {
-                      onCreateDebugScore((debugScoreSeconds * 1000).toLong())
-                      showToast(context, "Added custom score with db watermark!")
+                      viewModel.clearAllScores()
+                      showToast(context, "All high scores cleared.")
                     }
                     .padding(vertical = 12.dp),
                   contentAlignment = Alignment.Center
                 ) {
                   androidx.compose.material3.Text(
-                    text = "CREATE DEBUG SCORE",
-                    style = TextStyle(color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    text = "RESET ALL SCORES",
+                    style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                   )
                 }
               }
-
-              // Reset Button
-              Box(
-                modifier = Modifier
-                  .fillMaxWidth()
-                  .border(1.dp, Color.Gray, RoundedCornerShape(10.dp))
-                  .clickable {
-                    viewModel.clearAllScores()
-                    showToast(context, "All high scores cleared.")
-                  }
-                  .padding(vertical = 12.dp),
-                contentAlignment = Alignment.Center
-              ) {
-                androidx.compose.material3.Text(
-                  text = "RESET ALL SCORES",
-                  style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                )
-              }
             }
           }
+
           "request features" -> {
             Box(
               modifier = Modifier

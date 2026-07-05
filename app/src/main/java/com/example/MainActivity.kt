@@ -6,6 +6,19 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -25,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -74,6 +88,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.mutableIntStateOf
@@ -95,6 +110,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.SkipNext
@@ -157,6 +174,49 @@ fun isFoldableDevice(): Boolean {
   
   return hasFoldingFeature || hasHingeSensor
 }
+
+@Composable
+fun isFlipStyleFoldable(): Boolean {
+  val context = LocalContext.current
+  val activity = remember(context) { context.findActivity() } ?: return false
+  
+  val layoutInfoState = remember(activity) {
+    WindowInfoTracker.getOrCreate(activity).windowLayoutInfo(activity)
+  }.collectAsState(initial = null)
+  
+  val hasHorizontalFolding = remember(layoutInfoState.value) {
+    layoutInfoState.value?.displayFeatures?.any { 
+      it is FoldingFeature && it.orientation == FoldingFeature.Orientation.HORIZONTAL 
+    } == true
+  }
+  
+  val isFlipModel = remember {
+    val model = android.os.Build.MODEL.lowercase(Locale.US)
+    val product = android.os.Build.PRODUCT.lowercase(Locale.US)
+    val device = android.os.Build.DEVICE.lowercase(Locale.US)
+    model.contains("flip") || product.contains("flip") || device.contains("flip")
+  }
+  
+  val hasVerticalFolding = remember(layoutInfoState.value) {
+    layoutInfoState.value?.displayFeatures?.any { 
+      it is FoldingFeature && it.orientation == FoldingFeature.Orientation.VERTICAL 
+    } == true
+  }
+  
+  val isFoldModel = remember {
+    val model = android.os.Build.MODEL.lowercase(Locale.US)
+    val product = android.os.Build.PRODUCT.lowercase(Locale.US)
+    val device = android.os.Build.DEVICE.lowercase(Locale.US)
+    (model.contains("fold") || product.contains("fold") || device.contains("fold")) && !model.contains("flip")
+  }
+
+  if (hasVerticalFolding || isFoldModel) {
+    return false
+  }
+
+  return (hasHorizontalFolding || isFlipModel) && isFoldableDevice()
+}
+
 
 @Composable
 fun rememberHingeAngle(): Float? {
@@ -296,7 +356,11 @@ fun PingleImage(
   contentScale: ContentScale = ContentScale.Fit,
   colorFilter: ColorFilter? = null
 ) {
-  if (useCustomImage && !customImageUri.isNullOrEmpty()) {
+  val viewModel: PingleViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+  val invisiblePingleEnabled by viewModel.invisiblePingleEnabled.collectAsState()
+  if (invisiblePingleEnabled) {
+    Box(modifier = modifier)
+  } else if (useCustomImage && !customImageUri.isNullOrEmpty()) {
     val painter = coil.compose.rememberAsyncImagePainter(model = customImageUri)
     Image(
       painter = painter,
@@ -346,87 +410,151 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
     easterSpaceStars = easterSpaceStars,
     easterMatrixBg = easterMatrixBg
   ) {
-    when (screen) {
-      Screen.HOME -> HomeScreen(
-        isManualUnlocked = isManualUnlocked,
-        useCustomImage = useCustomImage,
-        pingleCustomImageUri = pingleCustomImageUri,
-        onUnlockManual = { viewModel.unlockManual() },
-        onPlayClicked = { viewModel.setScreen(Screen.PLAY) },
-        onManualSpinClicked = { viewModel.setScreen(Screen.MANUAL) },
-        onHighScoresClicked = { viewModel.setScreen(Screen.HIGH_SCORES) },
-        onOptionsClicked = { viewModel.setScreen(Screen.OPTIONS) }
-      )
-      Screen.PLAY -> PlayScreen(
-        speed = speed,
-        pingleTintId = pingleTintId,
-        pingleCustomColorInt = pingleCustomColorInt,
-        foldAngleThreshold = foldAngleThreshold,
-        useCustomImage = useCustomImage,
-        pingleCustomImageUri = pingleCustomImageUri,
-        onBackToHomeWithScore = { score ->
-          viewModel.saveScore(score)
-          viewModel.setScreen(Screen.HIGH_SCORES)
+    Box(modifier = Modifier.fillMaxSize()) {
+      val currentNonOptionsScreen = remember(screen) {
+        if (screen != Screen.OPTIONS) screen else Screen.HOME
+      }
+
+      AnimatedContent(
+        targetState = currentNonOptionsScreen,
+        transitionSpec = {
+          val rand = kotlin.random.Random.nextInt(5)
+          when (rand) {
+            0 -> {
+              // Vertical slide up + fade in
+              (slideInVertically(initialOffsetY = { it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(500)))
+                .togetherWith(slideOutVertically(targetOffsetY = { -it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(500)))
+            }
+            1 -> {
+              // Horizontal slide from right + fade in
+              (slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(500)))
+                .togetherWith(slideOutHorizontally(targetOffsetX = { -it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(500)))
+            }
+            2 -> {
+              // Scale up / zoom in + fade in
+              (scaleIn(initialScale = 0.8f, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(500)))
+                .togetherWith(scaleOut(targetScale = 1.1f, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(500)))
+            }
+            3 -> {
+              // Slide down from top + fade in
+              (slideInVertically(initialOffsetY = { -it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(500)))
+                .togetherWith(slideOutVertically(targetOffsetY = { it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(500)))
+            }
+            else -> {
+              // Slide from left, scale down slightly
+              (slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + scaleIn(initialScale = 0.9f, animationSpec = tween(500)) + fadeIn(tween(500)))
+                .togetherWith(slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(500, easing = FastOutSlowInEasing)) + scaleOut(targetScale = 0.9f, animationSpec = tween(500)) + fadeOut(tween(500)))
+            }
+          }
         },
-        onElapsedClickToHighScores = { score ->
-          viewModel.saveScore(score)
-          viewModel.setScreen(Screen.HIGH_SCORES)
+        modifier = Modifier.fillMaxSize(),
+        label = "ScreenTransition"
+      ) { targetScreen ->
+        when (targetScreen) {
+          Screen.HOME -> HomeScreen(
+            isManualUnlocked = isManualUnlocked,
+            useCustomImage = useCustomImage,
+            pingleCustomImageUri = pingleCustomImageUri,
+            onUnlockManual = { viewModel.unlockManual() },
+            onPlayClicked = { viewModel.setScreen(Screen.PLAY) },
+            onManualSpinClicked = { viewModel.setScreen(Screen.MANUAL) },
+            onHighScoresClicked = { viewModel.setScreen(Screen.HIGH_SCORES) },
+            onOptionsClicked = { viewModel.setScreen(Screen.OPTIONS) }
+          )
+          Screen.PLAY -> PlayScreen(
+            speed = speed,
+            pingleTintId = pingleTintId,
+            pingleCustomColorInt = pingleCustomColorInt,
+            foldAngleThreshold = foldAngleThreshold,
+            useCustomImage = useCustomImage,
+            pingleCustomImageUri = pingleCustomImageUri,
+            onBackToHomeWithScore = { score ->
+              viewModel.saveScore(score)
+              viewModel.setScreen(Screen.HIGH_SCORES)
+            },
+            onElapsedClickToHighScores = { score ->
+              viewModel.saveScore(score)
+              viewModel.setScreen(Screen.HIGH_SCORES)
+            }
+          )
+          Screen.HIGH_SCORES -> HighScoresScreen(
+            scores = topScores,
+            onBackClicked = { viewModel.setScreen(Screen.HOME) },
+            onClearAll = { viewModel.clearAllScores() }
+          )
+          Screen.MANUAL -> ManualPlayScreen(
+            pingleFriction = pingleFriction,
+            pingleTintId = pingleTintId,
+            pingleCustomColorInt = pingleCustomColorInt,
+            foldAngleThreshold = foldAngleThreshold,
+            useCustomImage = useCustomImage,
+            pingleCustomImageUri = pingleCustomImageUri,
+            onBackToHomeWithScore = { score ->
+              viewModel.saveScore(score, isManual = true)
+              viewModel.setScreen(Screen.HIGH_SCORES)
+            },
+            onElapsedClickToHighScores = { score ->
+              viewModel.saveScore(score, isManual = true)
+              viewModel.setScreen(Screen.HIGH_SCORES)
+            }
+          )
+          Screen.OPTIONS -> {}
+          Screen.PINGUI_SETUP -> PinguiSetupScreen(
+            onBackClicked = { viewModel.setScreen(Screen.OPTIONS) },
+            onSetUpNowClicked = { viewModel.setScreen(Screen.PINGUI_GAME_EDIT) }
+          )
+          Screen.PINGUI_GAME_EDIT -> PinguiGameEditScreen(
+            onBackClicked = { viewModel.setScreen(Screen.PINGUI_SETUP) }
+          )
         }
-      )
-      Screen.HIGH_SCORES -> HighScoresScreen(
-        scores = topScores,
-        onBackClicked = { viewModel.setScreen(Screen.HOME) },
-        onClearAll = { viewModel.clearAllScores() }
-      )
-      Screen.OPTIONS -> OptionsScreen(
-        speed = speed,
-        pingleFriction = pingleFriction,
-        isManualUnlocked = isManualUnlocked,
-        pingleTintId = pingleTintId,
-        pingleCustomColorInt = pingleCustomColorInt,
-        totalSpinDuration = totalSpinDuration,
-        foldAngleThreshold = foldAngleThreshold,
-        useCustomImage = useCustomImage,
-        pingleCustomImageUri = pingleCustomImageUri,
-        isDebugUnlocked = isDebugUnlocked,
-        easterRainbowNeon = easterRainbowNeon,
-        easterMatrixBg = easterMatrixBg,
-        easterReverseSpin = easterReverseSpin,
-        easterSpaceStars = easterSpaceStars,
-        isRainbowNeonUnlocked = isRainbowNeonUnlocked,
-        isMatrixBgUnlocked = isMatrixBgUnlocked,
-        isReverseSpinUnlocked = isReverseSpinUnlocked,
-        isSpaceStarsUnlocked = isSpaceStarsUnlocked,
-        onSpeedChange = { viewModel.setPingleSpeed(it) },
-        onFrictionChange = { viewModel.setPingleFriction(it) },
-        onTintSelect = { viewModel.setPingleTint(it) },
-        onCustomColorChange = { viewModel.setPingleCustomColor(it) },
-        onFoldAngleThresholdChange = { viewModel.setPingleFoldAngleThreshold(it) },
-        onCustomImageUriChange = { viewModel.setCustomImageUri(it) },
-        onUseCustomImageChange = { viewModel.setUseCustomImage(it) },
-        onEasterRainbowNeonChange = { viewModel.setEasterRainbowNeon(it) },
-        onEasterMatrixBgChange = { viewModel.setEasterMatrixBg(it) },
-        onEasterReverseSpinChange = { viewModel.setEasterReverseSpin(it) },
-        onEasterSpaceStarsChange = { viewModel.setEasterSpaceStars(it) },
-        onCreateDebugScore = { viewModel.saveDebugScore(it) },
-        onBackClicked = { viewModel.setScreen(Screen.HOME) }
-      )
-      Screen.MANUAL -> ManualPlayScreen(
-        pingleFriction = pingleFriction,
-        pingleTintId = pingleTintId,
-        pingleCustomColorInt = pingleCustomColorInt,
-        foldAngleThreshold = foldAngleThreshold,
-        useCustomImage = useCustomImage,
-        pingleCustomImageUri = pingleCustomImageUri,
-        onBackToHomeWithScore = { score ->
-          viewModel.saveScore(score, isManual = true)
-          viewModel.setScreen(Screen.HIGH_SCORES)
-        },
-        onElapsedClickToHighScores = { score ->
-          viewModel.saveScore(score, isManual = true)
-          viewModel.setScreen(Screen.HIGH_SCORES)
-        }
-      )
+      }
+
+      AnimatedVisibility(
+        visible = screen == Screen.OPTIONS,
+        enter = slideInVertically(
+          initialOffsetY = { it },
+          animationSpec = tween(durationMillis = 400, easing = FastOutSlowInEasing)
+        ),
+        exit = slideOutVertically(
+          targetOffsetY = { it },
+          animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing)
+        ),
+        modifier = Modifier.fillMaxSize()
+      ) {
+        OptionsScreen(
+          speed = speed,
+          pingleFriction = pingleFriction,
+          isManualUnlocked = isManualUnlocked,
+          pingleTintId = pingleTintId,
+          pingleCustomColorInt = pingleCustomColorInt,
+          totalSpinDuration = totalSpinDuration,
+          foldAngleThreshold = foldAngleThreshold,
+          useCustomImage = useCustomImage,
+          pingleCustomImageUri = pingleCustomImageUri,
+          isDebugUnlocked = isDebugUnlocked,
+          easterRainbowNeon = easterRainbowNeon,
+          easterMatrixBg = easterMatrixBg,
+          easterReverseSpin = easterReverseSpin,
+          easterSpaceStars = easterSpaceStars,
+          isRainbowNeonUnlocked = isRainbowNeonUnlocked,
+          isMatrixBgUnlocked = isMatrixBgUnlocked,
+          isReverseSpinUnlocked = isReverseSpinUnlocked,
+          isSpaceStarsUnlocked = isSpaceStarsUnlocked,
+          onSpeedChange = { viewModel.setPingleSpeed(it) },
+          onFrictionChange = { viewModel.setPingleFriction(it) },
+          onTintSelect = { viewModel.setPingleTint(it) },
+          onCustomColorChange = { viewModel.setPingleCustomColor(it) },
+          onFoldAngleThresholdChange = { viewModel.setPingleFoldAngleThreshold(it) },
+          onCustomImageUriChange = { viewModel.setCustomImageUri(it) },
+          onUseCustomImageChange = { viewModel.setUseCustomImage(it) },
+          onEasterRainbowNeonChange = { viewModel.setEasterRainbowNeon(it) },
+          onEasterMatrixBgChange = { viewModel.setEasterMatrixBg(it) },
+          onEasterReverseSpinChange = { viewModel.setEasterReverseSpin(it) },
+          onEasterSpaceStarsChange = { viewModel.setEasterSpaceStars(it) },
+          onCreateDebugScore = { viewModel.saveDebugScore(it) },
+          onBackClicked = { viewModel.setScreen(Screen.HOME) }
+        )
+      }
     }
   }
 }
@@ -480,59 +608,11 @@ fun HomeScreen(
   val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
   var clickCount by remember { mutableIntStateOf(0) }
-  var showGameModeMenu by remember { mutableStateOf(false) }
+  var isPlayExpanded by remember { mutableStateOf(false) }
 
-  if (showGameModeMenu) {
-    Dialog(onDismissRequest = { showGameModeMenu = false }) {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .padding(16.dp)
-          .border(
-            width = 1.dp,
-            color = Color.White.copy(alpha = 0.15f),
-            shape = RoundedCornerShape(20.dp)
-          )
-          .background(Color.Black, shape = RoundedCornerShape(20.dp))
-          .padding(24.dp)
-      ) {
-        Column(
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.spacedBy(16.dp),
-          modifier = Modifier.fillMaxWidth()
-        ) {
-          androidx.compose.material3.Text(
-            text = "SELECT GAMEMODE",
-            style = TextStyle(
-              fontFamily = FontFamily.SansSerif,
-              fontSize = 18.sp,
-              fontWeight = FontWeight.ExtraLight,
-              color = Color.White,
-              letterSpacing = 4.sp
-            )
-          )
-
-          Spacer(modifier = Modifier.height(4.dp))
-
-          MinimalistButton(
-            text = "normal",
-            onClick = {
-              showGameModeMenu = false
-              onPlayClicked()
-            },
-            modifier = Modifier.testTag("gamemode_normal_button")
-          )
-
-          MinimalistButton(
-            text = "PINGLEMANUALSPIN",
-            onClick = {
-              showGameModeMenu = false
-              onManualSpinClicked()
-            },
-            modifier = Modifier.testTag("gamemode_manual_button")
-          )
-        }
-      }
+  if (isPlayExpanded) {
+    androidx.activity.compose.BackHandler {
+      isPlayExpanded = false
     }
   }
 
@@ -544,6 +624,25 @@ fun HomeScreen(
       .navigationBarsPadding()
       .testTag("home_screen")
   ) {
+    // Full screen overlay scrim directly behind the controls to reverse the animation back to play button
+    androidx.compose.animation.AnimatedVisibility(
+      visible = isPlayExpanded,
+      enter = fadeIn(animationSpec = tween(350)),
+      exit = fadeOut(animationSpec = tween(300))
+    ) {
+      Box(
+        modifier = Modifier
+          .fillMaxSize()
+          .background(Color.Black.copy(alpha = 0.55f))
+          .clickable(
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null
+          ) {
+            isPlayExpanded = false
+          }
+      )
+    }
+
     Column(
       modifier = Modifier
         .fillMaxSize()
@@ -593,10 +692,13 @@ fun HomeScreen(
         )
       }
 
+      val invisiblePingleEnabled by viewModel.invisiblePingleEnabled.collectAsState()
+
       // Atmospheric centered static pingle
       Box(
         contentAlignment = Alignment.Center,
-        modifier = Modifier.size(240.dp)
+        modifier = Modifier
+          .size(240.dp)
       ) {
         Box(
           modifier = Modifier
@@ -619,24 +721,84 @@ fun HomeScreen(
         )
       }
 
-      // Elegant minimal control list
+      // Elegant minimal control list with smooth size change animation
       Column(
         modifier = Modifier
           .fillMaxWidth()
           .padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
       ) {
-        MinimalistButton(
-          text = "play",
-          onClick = {
-            if (isManualUnlocked) {
-              showGameModeMenu = true
-            } else {
-              onPlayClicked()
+        Box(
+          modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(animationSpec = tween(450, easing = FastOutSlowInEasing))
+        ) {
+          if (!isPlayExpanded) {
+            MinimalistButton(
+              text = "play",
+              onClick = {
+                if (isManualUnlocked) {
+                  isPlayExpanded = true
+                } else {
+                  onPlayClicked()
+                }
+              },
+              modifier = Modifier.testTag("play_button")
+            )
+          } else {
+            Column(
+              modifier = Modifier
+                .fillMaxWidth()
+                .border(
+                  width = 1.dp,
+                  color = Color.White.copy(alpha = 0.2f),
+                  shape = RoundedCornerShape(16.dp)
+                )
+                .background(Color.Black, shape = RoundedCornerShape(16.dp))
+                .padding(20.dp)
+                .clickable(
+                  interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                  indication = null
+                ) {
+                  // Absorb clicks inside the container so they don't trigger the scrim click
+                },
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+              androidx.compose.material3.Text(
+                text = "SELECT GAMEMODE",
+                style = TextStyle(
+                  fontFamily = FontFamily.SansSerif,
+                  fontSize = 12.sp,
+                  fontWeight = FontWeight.Bold,
+                  color = Color.White.copy(alpha = 0.8f),
+                  letterSpacing = 2.sp
+                )
+              )
+
+              Spacer(modifier = Modifier.height(4.dp))
+
+              MinimalistButton(
+                text = "normal",
+                onClick = {
+                  isPlayExpanded = false
+                  onPlayClicked()
+                },
+                modifier = Modifier.testTag("gamemode_normal_button")
+              )
+
+              MinimalistButton(
+                text = "PINGLEMANUALSPIN",
+                onClick = {
+                  isPlayExpanded = false
+                  onManualSpinClicked()
+                },
+                modifier = Modifier.testTag("gamemode_manual_button")
+              )
             }
-          },
-          modifier = Modifier.testTag("play_button")
-        )
+          }
+        }
+
         MinimalistButton(
           text = "high scores",
           onClick = onHighScoresClicked,
@@ -678,6 +840,37 @@ fun PlayScreen(
   val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
 
+  val isFolded = isFoldedState(threshold = foldAngleThreshold)
+  val isFlipFoldable = isFlipStyleFoldable()
+
+  val normalLayout by viewModel.normalLayout.collectAsState()
+  val unfoldedNormalLayout by viewModel.unfoldedNormalLayout.collectAsState()
+  val foldedNormalLayout by viewModel.foldedNormalLayout.collectAsState()
+
+  val activeLayout = remember(isFolded, isFlipFoldable, normalLayout, unfoldedNormalLayout, foldedNormalLayout) {
+    when {
+      isFlipFoldable && isFolded -> foldedNormalLayout
+      isFlipFoldable && !isFolded -> unfoldedNormalLayout
+      else -> normalLayout
+    }
+  }
+
+  val pingleScaleState = activeLayout.pingleScale
+  val pingleOffsetXState = activeLayout.pingleOffsetX
+  val pingleOffsetYState = activeLayout.pingleOffsetY
+  val pingleTiltState = activeLayout.pingleTilt
+
+  val timerScaleState = activeLayout.timerScale
+  val timerOffsetXState = activeLayout.timerOffsetX
+  val timerOffsetYState = activeLayout.timerOffsetY
+  val timerTiltState = activeLayout.timerTilt
+
+  val spotifyScaleState = activeLayout.spotifyScale
+  val spotifyOffsetXState = activeLayout.spotifyOffsetX
+  val spotifyOffsetYState = activeLayout.spotifyOffsetY
+  val spotifyTiltState = activeLayout.spotifyTilt
+
+
   // Cycle color if easterRainbowNeon is true
   val rainbowColor by if (easterRainbowNeon) {
     val infiniteTransition = rememberInfiniteTransition(label = "rainbow")
@@ -709,12 +902,18 @@ fun PlayScreen(
   }
   val colorFilter = remember(tintColor) { tintColor?.let { ColorFilter.tint(it, BlendMode.Color) } }
 
+  val invisiblePingleEnabled by viewModel.invisiblePingleEnabled.collectAsState()
+
   // High precision timer loop updating roughly at ~60fps
-  LaunchedEffect(Unit) {
-    val startTime = System.currentTimeMillis()
-    while (isActive) {
-      elapsedTimeMs = System.currentTimeMillis() - startTime
-      delay(16)
+  LaunchedEffect(invisiblePingleEnabled) {
+    if (invisiblePingleEnabled) {
+      elapsedTimeMs = 0L
+    } else {
+      val startTime = System.currentTimeMillis()
+      while (isActive) {
+        elapsedTimeMs = System.currentTimeMillis() - startTime
+        delay(16)
+      }
     }
   }
 
@@ -745,7 +944,6 @@ fun PlayScreen(
     String.format(Locale.US, "%02d:%02d.%02d", minutes, seconds, centiseconds)
   }
 
-  val isFolded = isFoldedState(threshold = foldAngleThreshold)
   val isFoldable = isFoldableDevice()
 
   val transitionProgress by animateFloatAsState(
@@ -765,7 +963,14 @@ fun PlayScreen(
   ) {
     // 1. Centered Spinning Pringle unit moving smoothly with transition progress
     Column(
-      modifier = Modifier.align(BiasAlignment(0f, -0.5f * transitionProgress)),
+      modifier = Modifier
+        .align(BiasAlignment(0f, -0.5f * transitionProgress))
+        .offset(x = pingleOffsetXState.dp, y = pingleOffsetYState.dp)
+        .graphicsLayer(
+          scaleX = pingleScaleState,
+          scaleY = pingleScaleState,
+          rotationZ = pingleTiltState
+        ),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center
     ) {
@@ -807,6 +1012,12 @@ fun PlayScreen(
     Box(
       modifier = Modifier
         .align(BiasAlignment(0f, -1.0f + 1.5f * transitionProgress))
+        .offset(x = timerOffsetXState.dp, y = timerOffsetYState.dp)
+        .graphicsLayer(
+          scaleX = timerScaleState,
+          scaleY = timerScaleState,
+          rotationZ = timerTiltState
+        )
         .padding(top = headerTopPadding)
         .padding(horizontal = headerHorizontalPadding, vertical = headerVerticalPadding)
     ) {
@@ -864,12 +1075,20 @@ fun PlayScreen(
     }
 
     // 3. Spotify Widget remains anchored beautifully at the bottom
-    SpotifyPlayerWidget(
+    Box(
       modifier = Modifier
         .align(Alignment.BottomCenter)
         .navigationBarsPadding()
         .padding(bottom = 16.dp)
-    )
+        .offset(x = spotifyOffsetXState.dp, y = spotifyOffsetYState.dp)
+        .graphicsLayer(
+          scaleX = spotifyScaleState,
+          scaleY = spotifyScaleState,
+          rotationZ = spotifyTiltState
+        )
+    ) {
+      SpotifyPlayerWidget()
+    }
   }
 }
 
@@ -2347,6 +2566,43 @@ fun ManualPlayScreen(
   val easterReverseSpin by viewModel.easterReverseSpin.collectAsState()
   val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
+  val invisiblePingleEnabledState by viewModel.invisiblePingleEnabled.collectAsState()
+
+  val isFolded = isFoldedState(threshold = foldAngleThreshold)
+  val isFlipFoldable = isFlipStyleFoldable()
+
+  val psmLayout by viewModel.psmLayout.collectAsState()
+  val unfoldedPsmLayout by viewModel.unfoldedPsmLayout.collectAsState()
+  val foldedPsmLayout by viewModel.foldedPsmLayout.collectAsState()
+
+  val activeLayout = remember(isFolded, isFlipFoldable, psmLayout, unfoldedPsmLayout, foldedPsmLayout) {
+    when {
+      isFlipFoldable && isFolded -> foldedPsmLayout
+      isFlipFoldable && !isFolded -> unfoldedPsmLayout
+      else -> psmLayout
+    }
+  }
+
+  val pingleScaleState = activeLayout.pingleScale
+  val pingleOffsetXState = activeLayout.pingleOffsetX
+  val pingleOffsetYState = activeLayout.pingleOffsetY
+  val pingleTiltState = activeLayout.pingleTilt
+
+  val timerScaleState = activeLayout.timerScale
+  val timerOffsetXState = activeLayout.timerOffsetX
+  val timerOffsetYState = activeLayout.timerOffsetY
+  val timerTiltState = activeLayout.timerTilt
+
+  val spotifyScaleState = activeLayout.spotifyScale
+  val spotifyOffsetXState = activeLayout.spotifyOffsetX
+  val spotifyOffsetYState = activeLayout.spotifyOffsetY
+  val spotifyTiltState = activeLayout.spotifyTilt
+
+  val discScaleState = activeLayout.discScale
+  val discOffsetXState = activeLayout.discOffsetX
+  val discOffsetYState = activeLayout.discOffsetY
+  val discTiltState = activeLayout.discTilt
+
 
   // Cycle color if easterRainbowNeon is true
   val rainbowColor by if (easterRainbowNeon) {
@@ -2379,23 +2635,28 @@ fun ManualPlayScreen(
   }
   val colorFilter = remember(tintColor) { tintColor?.let { ColorFilter.tint(it, BlendMode.Color) } }
 
-  val isFolded = isFoldedState(threshold = foldAngleThreshold)
   val isFoldable = isFoldableDevice()
 
   val currentFriction by androidx.compose.runtime.rememberUpdatedState(pingleFriction)
 
   // High precision timer/physics loop updating at ~60fps
-  LaunchedEffect(isFolded) {
+  LaunchedEffect(isFolded, invisiblePingleEnabledState) {
     var lastTime = System.currentTimeMillis()
     while (isActive) {
       val now = System.currentTimeMillis()
       val dt = (now - lastTime).coerceIn(1, 100)
       lastTime = now
 
+      if (invisiblePingleEnabledState) {
+        elapsedTimeMs = 0L
+      }
+
       if (Math.abs(velocity) > 0.05f) {
         val deltaRot = velocity * (dt / 16f)
         rotation = (rotation + (if (easterReverseSpin) -deltaRot else deltaRot)) % 360f
-        elapsedTimeMs += dt
+        if (!invisiblePingleEnabledState) {
+          elapsedTimeMs += dt
+        }
         // Proportional physics decay based on current friction: 0% friction means infinite spin, 100% means immediate stop
         // BUT if isFolded is true, friction does not apply!
         val decay = if (isFolded) 1.0f else (1.0f - (currentFriction / 100f)).coerceIn(0f, 1f)
@@ -2440,7 +2701,13 @@ fun ManualPlayScreen(
       Column(
         modifier = Modifier
           .align(BiasAlignment(0f, 1.15f - 0.65f * transitionProgress)) // dynamic entry slide up
-          .graphicsLayer(alpha = transitionProgress),
+          .offset(x = discOffsetXState.dp, y = discOffsetYState.dp)
+          .graphicsLayer(
+            scaleX = discScaleState,
+            scaleY = discScaleState,
+            rotationZ = discTiltState,
+            alpha = transitionProgress
+          ),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
       ) {
@@ -2552,7 +2819,14 @@ fun ManualPlayScreen(
 
     // 1. Centered Spinning Pringle unit moving smoothly with transition progress
     Column(
-      modifier = Modifier.align(BiasAlignment(0f, -0.5f * transitionProgress)),
+      modifier = Modifier
+        .align(BiasAlignment(0f, -0.5f * transitionProgress))
+        .offset(x = pingleOffsetXState.dp, y = pingleOffsetYState.dp)
+        .graphicsLayer(
+          scaleX = pingleScaleState,
+          scaleY = pingleScaleState,
+          rotationZ = pingleTiltState
+        ),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.Center
     ) {
@@ -2625,6 +2899,12 @@ fun ManualPlayScreen(
     Box(
       modifier = Modifier
         .align(BiasAlignment(0f, -1.0f + 1.5f * transitionProgress))
+        .offset(x = timerOffsetXState.dp, y = timerOffsetYState.dp)
+        .graphicsLayer(
+          scaleX = timerScaleState,
+          scaleY = timerScaleState,
+          rotationZ = timerTiltState
+        )
         .padding(top = headerTopPadding)
         .padding(horizontal = headerHorizontalPadding, vertical = headerVerticalPadding)
     ) {
@@ -2682,12 +2962,20 @@ fun ManualPlayScreen(
     }
 
     // 3. Spotify Widget remains anchored beautifully at the bottom
-    SpotifyPlayerWidget(
+    Box(
       modifier = Modifier
         .align(Alignment.BottomCenter)
         .navigationBarsPadding()
         .padding(bottom = 16.dp)
-    )
+        .offset(x = spotifyOffsetXState.dp, y = spotifyOffsetYState.dp)
+        .graphicsLayer(
+          scaleX = spotifyScaleState,
+          scaleY = spotifyScaleState,
+          rotationZ = spotifyTiltState
+        )
+    ) {
+      SpotifyPlayerWidget()
+    }
   }
 }
 
@@ -3142,4 +3430,643 @@ fun SpotifyPlayerWidget(
         }
     }
 }
+
+@Composable
+fun PinguiSetupScreen(
+  onBackClicked: () -> Unit,
+  onSetUpNowClicked: () -> Unit
+) {
+  val viewModel: PingleViewModel = viewModel()
+  val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
+  val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
+
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .pingleBackground(easterSpaceStars, easterMatrixBg)
+      .statusBarsPadding()
+      .navigationBarsPadding()
+      .testTag("pingui_setup_screen")
+  ) {
+    Column(
+      modifier = Modifier
+        .fillMaxSize()
+        .padding(horizontal = 32.dp, vertical = 24.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.SpaceBetween
+    ) {
+      // Top bar
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        androidx.compose.material3.Text(
+          text = "PINGUI SETUP",
+          style = TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.ExtraLight,
+            color = Color.White,
+            letterSpacing = 3.sp
+          )
+        )
+
+        Box(
+          modifier = Modifier
+            .size(40.dp)
+            .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+            .background(Color.White.copy(alpha = 0.05f), shape = RoundedCornerShape(10.dp))
+            .clickable { onBackClicked() },
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close Setup",
+            tint = Color.White,
+            modifier = Modifier.size(20.dp)
+          )
+        }
+      }
+
+      // Middle Card with cute illustration description
+      Column(
+        modifier = Modifier
+          .fillMaxWidth()
+          .weight(1f)
+          .padding(vertical = 40.dp)
+          .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(24.dp))
+          .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(24.dp))
+          .padding(28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+      ) {
+        // Cute design icon
+        Box(
+          modifier = Modifier
+            .size(80.dp)
+            .border(1.dp, Color(0xFF0078D7).copy(alpha = 0.3f), RoundedCornerShape(20.dp))
+            .background(Color(0xFF0078D7).copy(alpha = 0.08f), RoundedCornerShape(20.dp)),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = Icons.Default.Build,
+            contentDescription = "Builder Tool",
+            tint = Color(0xFF0078D7),
+            modifier = Modifier.size(36.dp)
+          )
+        }
+
+        Spacer(modifier = Modifier.height(28.dp))
+
+        androidx.compose.material3.Text(
+          text = "LAYOUT EDITOR",
+          style = TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontSize = 18.sp,
+            fontWeight = FontWeight.Light,
+            color = Color.White,
+            letterSpacing = 2.sp
+          )
+        )
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        androidx.compose.material3.Text(
+          text = "Customize your game screen elements exactly the way you want!\n\nModify size, position, and tilt angles for the Spinning Pingle, Timer, Spotify Widget, and the Fold Mode Controller to create your custom UI experience.",
+          style = TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Light,
+            color = Color.White.copy(alpha = 0.65f),
+            letterSpacing = 0.5.sp
+          ),
+          textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
+      }
+
+      // Bottom Button
+      MinimalistButton(
+        text = "set it up now",
+        onClick = onSetUpNowClicked,
+        modifier = Modifier.testTag("set_it_up_now_button")
+      )
+    }
+  }
+}
+
+@Composable
+fun PinguiGameEditScreen(
+  onBackClicked: () -> Unit
+) {
+  val viewModel: PingleViewModel = viewModel()
+  val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
+  val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
+
+  // 1. Detect if flip-style foldable
+  val isFlipStyle = isFlipStyleFoldable()
+  val editPages = remember(isFlipStyle) {
+    if (isFlipStyle) {
+      listOf("unfolded_normal", "folded_normal", "unfolded_psm", "folded_psm")
+    } else {
+      listOf("normal", "psm")
+    }
+  }
+
+  var currentPageIndex by remember { mutableStateOf(0) }
+  val currentConfig = editPages.getOrElse(currentPageIndex) { "normal" }
+
+  // 2. Load active parameters when page changes
+  var selectedElement by remember { mutableStateOf("pingle") }
+  LaunchedEffect(currentPageIndex, isFlipStyle) {
+    viewModel.loadActiveLayoutForConfig(currentConfig)
+    val showDisc = currentConfig == "psm" || currentConfig == "unfolded_psm" || currentConfig == "folded_psm"
+    if (!showDisc && selectedElement == "fold disc") {
+      selectedElement = "pingle"
+    }
+  }
+
+  // 3. Collect active parameters from view model
+  val pingleScale by viewModel.pingleScale.collectAsState()
+  val pingleOffsetX by viewModel.pingleOffsetX.collectAsState()
+  val pingleOffsetY by viewModel.pingleOffsetY.collectAsState()
+  val pingleTilt by viewModel.pingleTilt.collectAsState()
+
+  val timerScale by viewModel.timerScale.collectAsState()
+  val timerOffsetX by viewModel.timerOffsetX.collectAsState()
+  val timerOffsetY by viewModel.timerOffsetY.collectAsState()
+  val timerTilt by viewModel.timerTilt.collectAsState()
+
+  val spotifyScale by viewModel.spotifyScale.collectAsState()
+  val spotifyOffsetX by viewModel.spotifyOffsetX.collectAsState()
+  val spotifyOffsetY by viewModel.spotifyOffsetY.collectAsState()
+  val spotifyTilt by viewModel.spotifyTilt.collectAsState()
+
+  val discScale by viewModel.discScale.collectAsState()
+  val discOffsetX by viewModel.discOffsetX.collectAsState()
+  val discOffsetY by viewModel.discOffsetY.collectAsState()
+  val discTilt by viewModel.discTilt.collectAsState()
+
+  val useCustomImage by viewModel.useCustomImage.collectAsState()
+  val pingleCustomImageUri by viewModel.pingleCustomImageUri.collectAsState()
+
+  val density = androidx.compose.ui.platform.LocalDensity.current.density
+
+  Box(
+    modifier = Modifier
+      .fillMaxSize()
+      .pingleBackground(easterSpaceStars, easterMatrixBg)
+      .statusBarsPadding()
+      .navigationBarsPadding()
+      .testTag("pingui_edit_viewport")
+      // Handle multi-touch gestures globally on the viewport for the selected element
+      .pointerInput(selectedElement) {
+        detectTransformGestures { _, pan, zoom, rotation ->
+          val panDpX = pan.x / density
+          val panDpY = pan.y / density
+          when (selectedElement) {
+            "pingle" -> {
+              viewModel.setPingleOffsetX((viewModel.pingleOffsetX.value + panDpX).coerceIn(-400f, 400f))
+              viewModel.setPingleOffsetY((viewModel.pingleOffsetY.value + panDpY).coerceIn(-600f, 600f))
+              viewModel.setPingleScale((viewModel.pingleScale.value * zoom).coerceIn(0.4f, 4.0f))
+              viewModel.setPingleTilt((viewModel.pingleTilt.value + rotation) % 360f)
+            }
+            "timer" -> {
+              viewModel.setTimerOffsetX((viewModel.timerOffsetX.value + panDpX).coerceIn(-400f, 400f))
+              viewModel.setTimerOffsetY((viewModel.timerOffsetY.value + panDpY).coerceIn(-600f, 600f))
+              viewModel.setTimerScale((viewModel.timerScale.value * zoom).coerceIn(0.4f, 4.0f))
+              viewModel.setTimerTilt((viewModel.timerTilt.value + rotation) % 360f)
+            }
+            "spotify" -> {
+              viewModel.setSpotifyOffsetX((viewModel.spotifyOffsetX.value + panDpX).coerceIn(-400f, 400f))
+              viewModel.setSpotifyOffsetY((viewModel.spotifyOffsetY.value + panDpY).coerceIn(-600f, 600f))
+              viewModel.setSpotifyScale((viewModel.spotifyScale.value * zoom).coerceIn(0.4f, 4.0f))
+              viewModel.setSpotifyTilt((viewModel.spotifyTilt.value + rotation) % 360f)
+            }
+            "fold disc" -> {
+              viewModel.setDiscOffsetX((viewModel.discOffsetX.value + panDpX).coerceIn(-400f, 400f))
+              viewModel.setDiscOffsetY((viewModel.discOffsetY.value + panDpY).coerceIn(-600f, 600f))
+              viewModel.setDiscScale((viewModel.discScale.value * zoom).coerceIn(0.4f, 4.0f))
+              viewModel.setDiscTilt((viewModel.discTilt.value + rotation) % 360f)
+            }
+          }
+        }
+      }
+  ) {
+    // 1. Spinning Pingle Preview
+    val isPingleSelected = selectedElement == "pingle"
+    Box(
+      modifier = Modifier
+        .align(Alignment.Center)
+        .offset(x = pingleOffsetX.dp, y = pingleOffsetY.dp)
+        .graphicsLayer(
+          scaleX = pingleScale,
+          scaleY = pingleScale,
+          rotationZ = pingleTilt
+        )
+        .border(
+          width = if (isPingleSelected) 2.dp else 0.dp,
+          color = if (isPingleSelected) Color(0xFF00FFCC) else Color.Transparent,
+          shape = RoundedCornerShape(20.dp)
+        )
+        .clickable(
+          interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+          indication = null
+        ) {
+          selectedElement = "pingle"
+        }
+        .padding(12.dp),
+      contentAlignment = Alignment.Center
+    ) {
+      val pingleSize = 200.dp
+      Box(contentAlignment = Alignment.Center) {
+        Box(
+          modifier = Modifier
+            .size(260.dp, 140.dp)
+            .background(
+              Brush.radialGradient(
+                colors = listOf(
+                  Color(0x22FFD93D),
+                  Color(0x00FFD93D)
+                )
+              )
+            )
+        )
+
+        PingleImage(
+          useCustomImage = useCustomImage,
+          customImageUri = pingleCustomImageUri,
+          contentDescription = "Spinning Pingle Preview",
+          modifier = Modifier
+            .size(pingleSize)
+            .testTag("edit_pingle_image"),
+          contentScale = ContentScale.Fit
+        )
+      }
+    }
+
+    // 2. Timer (Header Row) Preview
+    val isTimerSelected = selectedElement == "timer"
+    Row(
+      modifier = Modifier
+        .fillMaxWidth()
+        .align(Alignment.TopCenter)
+        .padding(top = 160.dp) // clear help card
+        .offset(x = timerOffsetX.dp, y = timerOffsetY.dp)
+        .graphicsLayer(
+          scaleX = timerScale,
+          scaleY = timerScale,
+          rotationZ = timerTilt
+        )
+        .border(
+          width = if (isTimerSelected) 2.dp else 0.dp,
+          color = if (isTimerSelected) Color(0xFF00FFCC) else Color.Transparent,
+          shape = RoundedCornerShape(12.dp)
+        )
+        .clickable(
+          interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+          indication = null
+        ) {
+          selectedElement = "timer"
+        }
+        .padding(12.dp)
+        .padding(horizontal = 24.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      androidx.compose.material3.Text(
+        text = "04.28",
+        style = TextStyle(
+          fontFamily = FontFamily.SansSerif,
+          fontSize = 24.sp,
+          fontWeight = FontWeight.Medium,
+          color = Color.White.copy(alpha = 0.85f),
+          letterSpacing = (-0.5).sp
+        )
+      )
+
+      Box(
+        modifier = Modifier
+          .size(44.dp)
+          .border(
+            width = 1.dp,
+            color = Color.White.copy(alpha = 0.15f),
+            shape = RoundedCornerShape(12.dp)
+          )
+          .background(Color.White.copy(alpha = 0.05f), shape = RoundedCornerShape(12.dp)),
+        contentAlignment = Alignment.Center
+      ) {
+        Icon(
+          imageVector = Icons.Default.Check,
+          contentDescription = "Mock Check",
+          tint = Color.White,
+          modifier = Modifier.size(20.dp)
+        )
+      }
+    }
+
+    // 3. Spotify Widget Preview
+    val isSpotifySelected = selectedElement == "spotify"
+    Box(
+      modifier = Modifier
+        .fillMaxWidth()
+        .align(Alignment.BottomCenter)
+        .padding(bottom = 260.dp)
+        .offset(x = spotifyOffsetX.dp, y = spotifyOffsetY.dp)
+        .graphicsLayer(
+          scaleX = spotifyScale,
+          scaleY = spotifyScale,
+          rotationZ = spotifyTilt
+        )
+        .border(
+          width = if (isSpotifySelected) 2.dp else 0.dp,
+          color = if (isSpotifySelected) Color(0xFF00FFCC) else Color.Transparent,
+          shape = RoundedCornerShape(16.dp)
+        )
+        .clickable(
+          interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+          indication = null
+        ) {
+          selectedElement = "spotify"
+        }
+        .padding(12.dp),
+      contentAlignment = Alignment.Center
+    ) {
+      SpotifyPlayerWidget(
+        modifier = Modifier.padding(bottom = 16.dp)
+      )
+    }
+
+    // 4. Disc Controller Preview (Only shown if manual psm is active)
+    val showDisc = currentConfig == "psm" || currentConfig == "unfolded_psm" || currentConfig == "folded_psm"
+    if (showDisc) {
+      val isDiscSelected = selectedElement == "fold disc"
+      Column(
+        modifier = Modifier
+          .align(Alignment.BottomCenter)
+          .padding(bottom = 260.dp) // position next to spotify
+          .offset(x = discOffsetX.dp, y = discOffsetY.dp)
+          .graphicsLayer(
+            scaleX = discScale,
+            scaleY = discScale,
+            rotationZ = discTilt
+          )
+          .border(
+            width = if (isDiscSelected) 2.dp else 0.dp,
+            color = if (isDiscSelected) Color(0xFF00FFCC) else Color.Transparent,
+            shape = RoundedCornerShape(16.dp)
+          )
+          .clickable(
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null
+          ) {
+            selectedElement = "fold disc"
+          }
+          .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+      ) {
+        androidx.compose.material3.Text(
+          text = "PINGLE DISC CONTROLLER",
+          style = TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (isDiscSelected) Color(0xFF00FFCC) else Color.LightGray.copy(alpha = 0.6f),
+            letterSpacing = 1.5.sp
+          ),
+          modifier = Modifier.padding(bottom = 8.dp)
+        )
+
+        Box(
+          modifier = Modifier
+            .size(120.dp)
+            .border(
+              width = if (isDiscSelected) 2.5.dp else 1.5.dp,
+              color = if (isDiscSelected) Color(0xFF00FFCC) else Color.Gray,
+              shape = androidx.compose.foundation.shape.CircleShape
+            )
+            .background(Color.DarkGray.copy(alpha = 0.35f), androidx.compose.foundation.shape.CircleShape),
+          contentAlignment = Alignment.Center
+        ) {
+          Box(
+            modifier = Modifier
+              .size(80.dp)
+              .border(1.dp, Color.Gray.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+          )
+          Box(
+            modifier = Modifier
+              .size(40.dp)
+              .border(1.dp, Color.Gray.copy(alpha = 0.3f), androidx.compose.foundation.shape.CircleShape)
+          )
+        }
+      }
+    }
+
+    // 5. Floating Instructions / Help Card
+    Box(
+      modifier = Modifier
+        .align(Alignment.TopCenter)
+        .padding(top = 24.dp)
+        .padding(horizontal = 24.dp)
+        .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
+        .border(1.dp, Color(0xFF00FFCC).copy(alpha = 0.3f), RoundedCornerShape(16.dp))
+        .padding(horizontal = 20.dp, vertical = 12.dp)
+    ) {
+      Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        androidx.compose.material3.Text(
+          text = "PINGUI SETUP",
+          style = TextStyle(
+            color = Color(0xFF00FFCC),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 2.sp
+          )
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        androidx.compose.material3.Text(
+          text = "Tap any element to select, then Pinch/Drag/Twist directly to customize size, location, and tilt!",
+          style = TextStyle(
+            color = Color.White.copy(alpha = 0.8f),
+            fontSize = 11.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+          )
+        )
+      }
+    }
+
+    // 6. Bottom Selection Tabs and Navigation Bar
+    Column(
+      modifier = Modifier
+        .align(Alignment.BottomCenter)
+        .fillMaxWidth()
+        .background(Color.Black.copy(alpha = 0.9f))
+        .border(width = 1.dp, color = Color.White.copy(alpha = 0.12f))
+        .padding(bottom = 16.dp, top = 16.dp)
+        .padding(horizontal = 24.dp),
+      verticalArrangement = Arrangement.spacedBy(16.dp),
+      horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+      // Element Selection Tabs
+      val tabs = if (showDisc) listOf("pingle", "timer", "spotify", "fold disc") else listOf("pingle", "timer", "spotify")
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        tabs.forEach { tab ->
+          val isSelected = selectedElement == tab
+          Box(
+            modifier = Modifier
+              .weight(1f)
+              .border(
+                width = 1.5.dp,
+                color = if (isSelected) Color(0xFF00FFCC) else Color.White.copy(alpha = 0.12f),
+                shape = RoundedCornerShape(10.dp)
+              )
+              .background(
+                if (isSelected) Color(0xFF00FFCC).copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(10.dp)
+              )
+              .clickable { selectedElement = tab }
+              .padding(vertical = 10.dp),
+            contentAlignment = Alignment.Center
+          ) {
+            androidx.compose.material3.Text(
+              text = tab.uppercase(Locale.US),
+              style = TextStyle(
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (isSelected) Color(0xFF00FFCC) else Color.White.copy(alpha = 0.6f),
+                letterSpacing = 0.5.sp
+              )
+            )
+          }
+        }
+      }
+
+      // Small bottom bar containing Next/Done, Page, and Reset
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+      ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          if (currentPageIndex > 0) {
+            Box(
+              modifier = Modifier
+                .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                .background(Color.Black, RoundedCornerShape(8.dp))
+                .clickable {
+                  viewModel.saveActiveLayoutForConfig(currentConfig)
+                  currentPageIndex--
+                }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+              contentAlignment = Alignment.Center
+            ) {
+              androidx.compose.material3.Text(
+                text = "PREV",
+                style = TextStyle(
+                  color = Color.White.copy(alpha = 0.7f),
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold,
+                  letterSpacing = 1.sp
+                )
+              )
+            }
+          } else {
+            Box(
+              modifier = Modifier
+                .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                .background(Color.Black, RoundedCornerShape(8.dp))
+                .clickable { onBackClicked() },
+              contentAlignment = Alignment.Center
+            ) {
+              androidx.compose.material3.Text(
+                text = "CLOSE",
+                style = TextStyle(
+                  color = Color.White.copy(alpha = 0.7f),
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.Bold,
+                  letterSpacing = 1.sp
+                )
+              )
+            }
+          }
+
+          Box(
+            modifier = Modifier
+              .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+              .background(Color.Black, RoundedCornerShape(8.dp))
+              .clickable {
+                viewModel.resetLayoutConfig(currentConfig)
+                viewModel.loadActiveLayoutForConfig(currentConfig)
+              }
+              .padding(horizontal = 14.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center
+          ) {
+            androidx.compose.material3.Text(
+              text = "RESET",
+              style = TextStyle(
+                color = Color.White.copy(alpha = 0.5f),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.sp
+              )
+            )
+          }
+        }
+
+        // Page Progress Status Text
+        val pageTitle = when (currentConfig) {
+          "normal" -> "Normal UI"
+          "psm" -> "Pinglespin Manual"
+          "unfolded_normal" -> "Unfolded Normal"
+          "folded_normal" -> "Folded Normal"
+          "unfolded_psm" -> "Unfolded PSM"
+          "folded_psm" -> "Folded PSM"
+          else -> "Custom UI"
+        }
+        androidx.compose.material3.Text(
+          text = "${currentPageIndex + 1}/${editPages.size}: $pageTitle".uppercase(Locale.US),
+          style = TextStyle(
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 10.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.5.sp
+          )
+        )
+
+        val isLastPage = currentPageIndex == editPages.size - 1
+        val nextText = if (isLastPage) "DONE" else "NEXT"
+
+        Box(
+          modifier = Modifier
+            .border(1.dp, Color(0xFF00FFCC), RoundedCornerShape(8.dp))
+            .background(Color(0xFF00FFCC).copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+            .clickable {
+              viewModel.saveActiveLayoutForConfig(currentConfig)
+              if (isLastPage) {
+                onBackClicked()
+              } else {
+                currentPageIndex++
+              }
+            }
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+          contentAlignment = Alignment.Center
+        ) {
+          androidx.compose.material3.Text(
+            text = nextText,
+            style = TextStyle(
+              color = Color(0xFF00FFCC),
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Bold,
+              letterSpacing = 1.sp
+            )
+          )
+        }
+      }
+    }
+  }
+}
+
 
