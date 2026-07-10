@@ -31,6 +31,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -117,6 +118,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.viewinterop.AndroidView
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -356,6 +358,68 @@ val PINGLE_TINTS = listOf(
 )
 
 @Composable
+fun VideoPingle(
+  videoUri: String,
+  modifier: Modifier = Modifier
+) {
+  val context = LocalContext.current
+  var mediaPlayerRef by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<android.media.MediaPlayer?>(null) }
+
+  androidx.compose.runtime.DisposableEffect(videoUri) {
+    onDispose {
+      try {
+        mediaPlayerRef?.stop()
+        mediaPlayerRef?.release()
+      } catch (e: Exception) {
+        e.printStackTrace()
+      }
+    }
+  }
+
+  androidx.compose.ui.viewinterop.AndroidView(
+    factory = { ctx ->
+      val textureView = android.view.TextureView(ctx).apply {
+        isOpaque = false
+      }
+      val mediaPlayer = android.media.MediaPlayer().apply {
+        isLooping = true
+        setVolume(0f, 0f)
+      }
+      mediaPlayerRef = mediaPlayer
+
+      textureView.surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(surface: android.graphics.SurfaceTexture, width: Int, height: Int) {
+          try {
+            val s = android.view.Surface(surface)
+            mediaPlayer.setSurface(s)
+            mediaPlayer.setDataSource(ctx, android.net.Uri.parse(videoUri))
+            mediaPlayer.prepareAsync()
+          } catch (e: Exception) {
+            e.printStackTrace()
+          }
+        }
+        override fun onSurfaceTextureSizeChanged(surface: android.graphics.SurfaceTexture, width: Int, height: Int) {}
+        override fun onSurfaceTextureDestroyed(surface: android.graphics.SurfaceTexture): Boolean {
+          return true
+        }
+        override fun onSurfaceTextureUpdated(surface: android.graphics.SurfaceTexture) {}
+      }
+
+      mediaPlayer.setOnPreparedListener { mp ->
+        try {
+          mp.start()
+        } catch (e: Exception) {
+          e.printStackTrace()
+        }
+      }
+
+      textureView
+    },
+    modifier = modifier
+  )
+}
+
+@Composable
 fun PingleImage(
   useCustomImage: Boolean,
   customImageUri: String?,
@@ -366,12 +430,47 @@ fun PingleImage(
 ) {
   val viewModel: PingleViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
   val invisiblePingleEnabled by viewModel.invisiblePingleEnabled.collectAsState()
+  val loadEverything by viewModel.loadEverything.collectAsState()
+  val customMediaType by viewModel.customMediaType.collectAsState()
+
   if (invisiblePingleEnabled) {
     Box(modifier = modifier)
   } else if (useCustomImage && !customImageUri.isNullOrEmpty()) {
-    val painter = coil.compose.rememberAsyncImagePainter(model = customImageUri)
+    if (customMediaType == "video") {
+      VideoPingle(videoUri = customImageUri, modifier = modifier)
+    } else if (customMediaType == "unrecognized") {
+      BoxWithConstraints(
+        modifier = modifier
+          .background(Color(0xFF222222), shape = androidx.compose.foundation.shape.CircleShape)
+          .border(4.dp, Color(0xFF0078D7), shape = androidx.compose.foundation.shape.CircleShape),
+        contentAlignment = Alignment.Center
+      ) {
+        val sizeDp = maxWidth
+        val fontSizeSp = (sizeDp.value * 0.6f).sp
+        PingleText(
+          text = "?",
+          style = TextStyle(
+            fontFamily = FontFamily.Monospace,
+            fontSize = fontSizeSp,
+            fontWeight = FontWeight.ExtraBold,
+            color = Color.White
+          )
+        )
+      }
+    } else {
+      val painter = coil.compose.rememberAsyncImagePainter(model = customImageUri)
+      Image(
+        painter = painter,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = contentScale,
+        colorFilter = colorFilter
+      )
+    }
+  } else if (loadEverything && viewModel.preloadedPurePringle != null) {
+    val preloaded = viewModel.preloadedPurePringle!!
     Image(
-      painter = painter,
+      bitmap = preloaded,
       contentDescription = contentDescription,
       modifier = modifier,
       contentScale = contentScale,
@@ -391,6 +490,7 @@ fun PingleImage(
 @Composable
 fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
   KeepScreenOn()
+  var hasShownLoadingScreen by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
   val screen by viewModel.currentScreen.collectAsState()
   val speed by viewModel.pingleSpeed.collectAsState()
   val pingleFriction by viewModel.pingleFriction.collectAsState()
@@ -413,6 +513,7 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
   val isMatrixBgUnlocked by viewModel.isMatrixBgUnlocked.collectAsState()
   val isReverseSpinUnlocked by viewModel.isReverseSpinUnlocked.collectAsState()
   val isSpaceStarsUnlocked by viewModel.isSpaceStarsUnlocked.collectAsState()
+  val isChineseCrashed by viewModel.isChineseCrashed.collectAsState()
 
   PingleBackgroundWrapper(
     easterSpaceStars = easterSpaceStars,
@@ -463,6 +564,8 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
             isManualUnlocked = isManualUnlocked,
             useCustomImage = useCustomImage,
             pingleCustomImageUri = pingleCustomImageUri,
+            showLoadingSequence = !hasShownLoadingScreen,
+            onLoadingFinished = { hasShownLoadingScreen = true },
             onUnlockManual = { viewModel.unlockManual() },
             onPlayClicked = { viewModel.setScreen(Screen.PLAY) },
             onManualSpinClicked = { viewModel.setScreen(Screen.MANUAL) },
@@ -512,7 +615,7 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
             onSetUpNowClicked = { viewModel.setScreen(Screen.PINGUI_GAME_EDIT) }
           )
           Screen.PINGUI_GAME_EDIT -> PinguiGameEditScreen(
-            onBackClicked = { viewModel.setScreen(Screen.PINGUI_SETUP) }
+            onBackClicked = { viewModel.setScreen(Screen.OPTIONS) }
           )
         }
       }
@@ -584,7 +687,7 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
               verticalArrangement = Arrangement.spacedBy(8.dp),
               horizontalAlignment = Alignment.CenterHorizontally
             ) {
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "DEV FOLD MODE",
                 style = TextStyle(
                   color = Color(0xFF00FFCC),
@@ -621,7 +724,7 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
                     },
                   contentAlignment = Alignment.Center
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = label,
                     style = TextStyle(
                       color = if (isSelected) Color(0xFF00FFCC) else Color.White.copy(alpha = 0.6f),
@@ -634,7 +737,7 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
               }
               
               // Collapse button
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "MINIMIZE",
                 style = TextStyle(
                   color = Color.White.copy(alpha = 0.4f),
@@ -674,7 +777,7 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
                   .size(8.dp)
                   .background(badgeColor, androidx.compose.foundation.shape.CircleShape)
               )
-              androidx.compose.material3.Text(
+              PingleText(
                 text = currentModeLabel,
                 style = TextStyle(
                   color = Color.White,
@@ -686,6 +789,8 @@ fun PingleSpinApp(viewModel: PingleViewModel = viewModel()) {
             }
           }
         }
+
+
       }
     }
   }
@@ -697,6 +802,10 @@ fun MinimalistButton(
   onClick: () -> Unit,
   modifier: Modifier = Modifier
 ) {
+  val viewModel: PingleViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+  val buttonVibrationMode by viewModel.buttonVibrationMode.collectAsState()
+  val context = androidx.compose.ui.platform.LocalContext.current
+
   Box(
     modifier = modifier
       .fillMaxWidth()
@@ -707,11 +816,14 @@ fun MinimalistButton(
         shape = RoundedCornerShape(14.dp)
       )
       .background(Color.Black, shape = RoundedCornerShape(14.dp))
-      .clickable { onClick() }
+      .clickable {
+        VibrationHelper.vibrate(context, buttonVibrationMode)
+        onClick()
+      }
       .padding(horizontal = 16.dp),
     contentAlignment = Alignment.Center
   ) {
-    androidx.compose.material3.Text(
+    PingleText(
       text = text.uppercase(Locale.US),
       style = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -729,6 +841,8 @@ fun HomeScreen(
   isManualUnlocked: Boolean,
   useCustomImage: Boolean,
   pingleCustomImageUri: String?,
+  showLoadingSequence: Boolean,
+  onLoadingFinished: () -> Unit,
   onUnlockManual: () -> Unit,
   onPlayClicked: () -> Unit,
   onManualSpinClicked: () -> Unit,
@@ -739,8 +853,119 @@ fun HomeScreen(
   val viewModel: PingleViewModel = viewModel()
   val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
+  val pingleTintId by viewModel.pingleTint.collectAsState()
+  val pingleCustomColorInt by viewModel.pingleCustomColor.collectAsState()
+  val easterRainbowNeon by viewModel.easterRainbowNeon.collectAsState()
+
+  // Cycle color if easterRainbowNeon is true on the title/home screen
+  val rainbowColor by if (easterRainbowNeon) {
+    val infiniteTransition = rememberInfiniteTransition(label = "rainbow_home")
+    val hue by infiniteTransition.animateFloat(
+      initialValue = 0f,
+      targetValue = 360f,
+      animationSpec = infiniteRepeatable(
+        animation = tween(6000, easing = LinearEasing),
+        repeatMode = RepeatMode.Restart
+      ),
+      label = "hue_home"
+    )
+    remember(hue) {
+      mutableStateOf(Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f))))
+    }
+  } else {
+    remember { mutableStateOf(Color.Transparent) }
+  }
+
+  val selectedTintOption = remember(pingleTintId) { PINGLE_TINTS.firstOrNull { it.id == pingleTintId } }
+  val tintColor = remember(pingleTintId, pingleCustomColorInt, easterRainbowNeon, rainbowColor) {
+    if (easterRainbowNeon) {
+      rainbowColor
+    } else if (pingleTintId == "custom") {
+      Color(pingleCustomColorInt)
+    } else {
+      selectedTintOption?.color
+    }
+  }
+  val colorFilter = remember(tintColor) { tintColor?.let { ColorFilter.tint(it, BlendMode.Color) } }
+
   var clickCount by remember { mutableIntStateOf(0) }
   var isPlayExpanded by remember { mutableStateOf(false) }
+
+  var loadingState by remember { mutableStateOf(if (showLoadingSequence) "loading" else "menu") }
+  var rotationAngle by remember { mutableFloatStateOf(0f) }
+  var menuAlpha by remember { mutableFloatStateOf(if (showLoadingSequence) 0f else 1f) }
+
+  LaunchedEffect(showLoadingSequence) {
+    if (showLoadingSequence) {
+      loadingState = "loading"
+      val spinDuration = 5000L // 5 seconds
+      val decelerateDuration = 2000L
+      var lastTime = withFrameMillis { it }
+      val startTime = lastTime
+
+      while (true) {
+        val now = withFrameMillis { it }
+        val elapsed = now - startTime
+        val dt = (now - lastTime) / 1000f // delta time in seconds
+        lastTime = now
+
+        val (targetSpeedDegreesPerSec, currentPhase) = when {
+          elapsed < spinDuration -> {
+            1440f to "loading" // 4 full rotations per second
+          }
+          elapsed < spinDuration + decelerateDuration -> {
+            val decelElapsed = elapsed - spinDuration
+            val fraction = decelElapsed.toFloat() / decelerateDuration
+            val easedFraction = 1f - (1f - fraction) * (1f - fraction) // quadratic out
+            val s = 1440f * (1f - easedFraction)
+            s to "slowing"
+          }
+          else -> {
+            0f to "menu"
+          }
+        }
+
+        if (currentPhase != loadingState) {
+          loadingState = currentPhase
+        }
+
+        rotationAngle = (rotationAngle + targetSpeedDegreesPerSec * dt) % 360f
+
+        val alpha = when {
+          elapsed < spinDuration -> 0f
+          elapsed < spinDuration + decelerateDuration -> {
+            val decelElapsed = elapsed - spinDuration
+            val fraction = decelElapsed.toFloat() / decelerateDuration
+            // Smooth ease-in-out
+            if (fraction < 0.5f) {
+              2f * fraction * fraction
+            } else {
+              1f - (-2f * fraction + 2f) * (-2f * fraction + 2f) / 2f
+            }
+          }
+          else -> 1f
+        }
+        menuAlpha = alpha
+
+        if (currentPhase == "menu") {
+          val startAngle = rotationAngle % 360f
+          val diff = if (startAngle > 180f) startAngle - 360f else startAngle
+          val steps = 30
+          for (step in 1..steps) {
+            val progress = step.toFloat() / steps
+            rotationAngle = startAngle - diff * progress
+            kotlinx.coroutines.delay(16)
+          }
+          rotationAngle = 0f
+          onLoadingFinished()
+          break
+        }
+      }
+    } else {
+      loadingState = "menu"
+      menuAlpha = 1f
+    }
+  }
 
   if (isPlayExpanded) {
     androidx.activity.compose.BackHandler {
@@ -787,11 +1012,12 @@ fun HomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
           .padding(top = 16.dp)
+          .graphicsLayer { alpha = menuAlpha }
           .clickable(
             indication = null,
             interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
           ) {
-            if (!isManualUnlocked) {
+            if (loadingState == "menu" && !isManualUnlocked) {
               clickCount++
               if (clickCount >= 8) {
                 onUnlockManual()
@@ -801,7 +1027,7 @@ fun HomeScreen(
           }
           .testTag("pinglespin_title")
       ) {
-        androidx.compose.material3.Text(
+        PingleText(
           text = "pinglespin".uppercase(Locale.US),
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -812,7 +1038,7 @@ fun HomeScreen(
           )
         )
         Spacer(modifier = Modifier.height(6.dp))
-        androidx.compose.material3.Text(
+        PingleText(
           text = "made by pingleTEK ©2025-inf".uppercase(Locale.US),
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -848,8 +1074,13 @@ fun HomeScreen(
           useCustomImage = useCustomImage,
           customImageUri = pingleCustomImageUri,
           contentDescription = "Static Pringle",
-          modifier = Modifier.size(190.dp),
-          contentScale = ContentScale.Fit
+          modifier = Modifier
+            .size(190.dp)
+            .graphicsLayer {
+              rotationZ = rotationAngle + 180f
+            },
+          contentScale = ContentScale.Fit,
+          colorFilter = colorFilter
         )
       }
 
@@ -857,7 +1088,8 @@ fun HomeScreen(
       Column(
         modifier = Modifier
           .fillMaxWidth()
-          .padding(bottom = 24.dp),
+          .padding(bottom = 24.dp)
+          .graphicsLayer { alpha = menuAlpha },
         verticalArrangement = Arrangement.spacedBy(14.dp)
       ) {
         Box(
@@ -869,10 +1101,12 @@ fun HomeScreen(
             MinimalistButton(
               text = "play",
               onClick = {
-                if (isManualUnlocked) {
-                  isPlayExpanded = true
-                } else {
-                  onPlayClicked()
+                if (loadingState == "menu") {
+                  if (isManualUnlocked) {
+                    isPlayExpanded = true
+                  } else {
+                    onPlayClicked()
+                  }
                 }
               },
               modifier = Modifier.testTag("play_button")
@@ -897,7 +1131,7 @@ fun HomeScreen(
               horizontalAlignment = Alignment.CenterHorizontally,
               verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "SELECT GAMEMODE",
                 style = TextStyle(
                   fontFamily = FontFamily.SansSerif,
@@ -913,8 +1147,10 @@ fun HomeScreen(
               MinimalistButton(
                 text = "normal",
                 onClick = {
-                  isPlayExpanded = false
-                  onPlayClicked()
+                  if (loadingState == "menu") {
+                    isPlayExpanded = false
+                    onPlayClicked()
+                  }
                 },
                 modifier = Modifier.testTag("gamemode_normal_button")
               )
@@ -922,8 +1158,10 @@ fun HomeScreen(
               MinimalistButton(
                 text = "PINGLEMANUALSPIN",
                 onClick = {
-                  isPlayExpanded = false
-                  onManualSpinClicked()
+                  if (loadingState == "menu") {
+                    isPlayExpanded = false
+                    onManualSpinClicked()
+                  }
                 },
                 modifier = Modifier.testTag("gamemode_manual_button")
               )
@@ -933,12 +1171,20 @@ fun HomeScreen(
 
         MinimalistButton(
           text = "high scores",
-          onClick = onHighScoresClicked,
+          onClick = {
+            if (loadingState == "menu") {
+              onHighScoresClicked()
+            }
+          },
           modifier = Modifier.testTag("high_scores_button")
         )
         MinimalistButton(
           text = "options",
-          onClick = onOptionsClicked,
+          onClick = {
+            if (loadingState == "menu") {
+              onOptionsClicked()
+            }
+          },
           modifier = Modifier.testTag("options_button")
         )
       }
@@ -971,6 +1217,8 @@ fun PlayScreen(
   val easterReverseSpin by viewModel.easterReverseSpin.collectAsState()
   val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
+  val spinVibrationMode by viewModel.spinVibrationMode.collectAsState()
+  val spinVibrationInterval by viewModel.spinVibrationInterval.collectAsState()
 
   val isFolded = isFoldedState(threshold = foldAngleThreshold)
   val isFlipFoldable = isFlipStyleFoldable()
@@ -1043,8 +1291,9 @@ fun PlayScreen(
     } else {
       val startTime = System.currentTimeMillis()
       while (isActive) {
-        elapsedTimeMs = System.currentTimeMillis() - startTime
-        delay(16)
+        androidx.compose.runtime.withFrameMillis {
+          elapsedTimeMs = System.currentTimeMillis() - startTime
+        }
       }
     }
   }
@@ -1162,7 +1411,7 @@ fun PlayScreen(
         val timerSize = (24f + 4f * transitionProgress).sp
         val timerWeight = if (transitionProgress > 0.5f) FontWeight.SemiBold else FontWeight.Medium
         val timerAlpha = 0.85f + 0.05f * transitionProgress
-        androidx.compose.material3.Text(
+        PingleText(
           text = formattedTime,
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -1248,7 +1497,7 @@ fun HighScoresScreen(
         .padding(horizontal = 32.dp, vertical = 24.dp),
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
-      androidx.compose.material3.Text(
+      PingleText(
         text = "HIGH SCORES",
         style = TextStyle(
           fontFamily = FontFamily.SansSerif,
@@ -1262,7 +1511,7 @@ fun HighScoresScreen(
 
       Spacer(modifier = Modifier.height(4.dp))
 
-      androidx.compose.material3.Text(
+      PingleText(
         text = "MOST TIME PINgLE SPINnED",
         style = TextStyle(
           fontFamily = FontFamily.SansSerif,
@@ -1283,7 +1532,7 @@ fun HighScoresScreen(
           contentAlignment = Alignment.Center
         ) {
           Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "NO SPINS YET",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1294,7 +1543,7 @@ fun HighScoresScreen(
               )
             )
             Spacer(modifier = Modifier.height(8.dp))
-            androidx.compose.material3.Text(
+            PingleText(
               text = "Select play to start spinning",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1332,7 +1581,7 @@ fun HighScoresScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp)
               ) {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "#${index + 1}",
                   style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
@@ -1351,7 +1600,7 @@ fun HighScoresScreen(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = formatDuration(score.durationMs),
                     style = TextStyle(
                       fontFamily = FontFamily.SansSerif,
@@ -1368,7 +1617,7 @@ fun HighScoresScreen(
                         .border(0.5.dp, Color(0xFFFFD93D).copy(alpha = 0.4f), shape = RoundedCornerShape(4.dp))
                         .padding(horizontal = 4.dp, vertical = 2.dp)
                     ) {
-                      androidx.compose.material3.Text(
+                      PingleText(
                         text = "pms",
                         style = TextStyle(
                           fontFamily = FontFamily.SansSerif,
@@ -1387,7 +1636,7 @@ fun HighScoresScreen(
                         .border(0.5.dp, Color(0xFFFF453A).copy(alpha = 0.4f), shape = RoundedCornerShape(4.dp))
                         .padding(horizontal = 4.dp, vertical = 2.dp)
                     ) {
-                      androidx.compose.material3.Text(
+                      PingleText(
                         text = "db",
                         style = TextStyle(
                           fontFamily = FontFamily.SansSerif,
@@ -1402,7 +1651,7 @@ fun HighScoresScreen(
                 }
               }
 
-              androidx.compose.material3.Text(
+              PingleText(
                 text = formatTimestamp(score.timestamp),
                 style = TextStyle(
                   fontFamily = FontFamily.SansSerif,
@@ -1418,7 +1667,7 @@ fun HighScoresScreen(
       Spacer(modifier = Modifier.height(24.dp))
 
       if (scores.isNotEmpty()) {
-        androidx.compose.material3.Text(
+        PingleText(
           text = "WARNING: DELETING SCORES IS PERMANENT",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -1446,7 +1695,7 @@ fun HighScoresScreen(
             .clickable { onBackClicked() },
           contentAlignment = Alignment.Center
         ) {
-          androidx.compose.material3.Text(
+          PingleText(
             text = "BACK",
             style = TextStyle(
               fontFamily = FontFamily.SansSerif,
@@ -1468,7 +1717,7 @@ fun HighScoresScreen(
               .clickable { onClearAll() },
             contentAlignment = Alignment.Center
           ) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "CLEAR ALL",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1531,7 +1780,7 @@ fun OptionsScreenOld(
         modifier = Modifier
           .padding(top = 16.dp)
       ) {
-        androidx.compose.material3.Text(
+        PingleText(
           text = "OPTIONS",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -1542,7 +1791,7 @@ fun OptionsScreenOld(
           )
         )
         Spacer(modifier = Modifier.height(6.dp))
-        androidx.compose.material3.Text(
+        PingleText(
           text = "SYSTEM CONFIGURATION",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -1632,7 +1881,7 @@ fun OptionsScreenOld(
           horizontalArrangement = Arrangement.SpaceBetween,
           verticalAlignment = Alignment.CenterVertically
         ) {
-          androidx.compose.material3.Text(
+          PingleText(
             text = "pinglespeed".uppercase(Locale.US),
             style = TextStyle(
               fontFamily = FontFamily.SansSerif,
@@ -1642,7 +1891,7 @@ fun OptionsScreenOld(
               letterSpacing = 3.sp
             )
           )
-          androidx.compose.material3.Text(
+          PingleText(
             text = String.format(Locale.US, "%.1fx", speed),
             style = TextStyle(
               fontFamily = FontFamily.SansSerif,
@@ -1676,7 +1925,7 @@ fun OptionsScreenOld(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "pinglefriction".uppercase(Locale.US),
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1686,7 +1935,7 @@ fun OptionsScreenOld(
                 letterSpacing = 3.sp
               )
             )
-            androidx.compose.material3.Text(
+            PingleText(
               text = String.format(Locale.US, "%.0f%%", pingleFriction),
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1721,7 +1970,7 @@ fun OptionsScreenOld(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
           ) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "fold angle".uppercase(Locale.US),
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1731,7 +1980,7 @@ fun OptionsScreenOld(
                 letterSpacing = 3.sp
               )
             )
-            androidx.compose.material3.Text(
+            PingleText(
               text = String.format(Locale.US, "%.0f°", foldAngleThreshold),
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1755,7 +2004,7 @@ fun OptionsScreenOld(
             modifier = Modifier.fillMaxWidth().testTag("pingle_fold_angle_slider")
           )
 
-          androidx.compose.material3.Text(
+          PingleText(
             text = "Triggers tabletop split layout when folded below this angle.",
             style = TextStyle(
               fontFamily = FontFamily.SansSerif,
@@ -1772,7 +2021,7 @@ fun OptionsScreenOld(
           val isCustomUnlocked = totalSpinDuration >= 18000000L // 5 hours in ms
           val isCustomSelected = pingleTintId == "custom"
           Column {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "PINGLE TINT",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -1885,7 +2134,7 @@ fun OptionsScreenOld(
               val customMinutes = (totalSpinDuration % 3600000L) / 60000L
               val customSeconds = (totalSpinDuration % 60000L) / 1000L
               val progressTextCustom = String.format(Locale.US, "%d:%02d:%02d / 5:00:00", customHours, customMinutes, customSeconds)
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "🔒 Custom Colors Lock in Progress: $progressTextCustom",
                 style = TextStyle(
                   fontFamily = FontFamily.SansSerif,
@@ -1903,7 +2152,7 @@ fun OptionsScreenOld(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
               ) {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "CUSTOM_COLOR".uppercase(Locale.US),
                   style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
@@ -1919,7 +2168,7 @@ fun OptionsScreenOld(
                   verticalAlignment = Alignment.CenterVertically,
                   horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = String.format(Locale.US, "#%06X", pingleCustomColorInt and 0xFFFFFF),
                     style = TextStyle(
                       fontFamily = FontFamily.Monospace,
@@ -2008,7 +2257,7 @@ fun OptionsScreenOld(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.Start
           ) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "🔒 PINGLE TINT (Locked)",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -2021,7 +2270,7 @@ fun OptionsScreenOld(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            androidx.compose.material3.Text(
+            PingleText(
               text = "Reach 1 Hour total spin time to unlock dynamic custom tints!",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -2032,7 +2281,7 @@ fun OptionsScreenOld(
 
             Spacer(modifier = Modifier.height(4.dp))
 
-            androidx.compose.material3.Text(
+            PingleText(
               text = "Progress: $progressText",
               style = TextStyle(
                 fontFamily = FontFamily.SansSerif,
@@ -2062,19 +2311,19 @@ fun OptionsScreenOld(
               horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               Icon(imageVector = Icons.Default.Lock, contentDescription = "Locked", tint = Color(0xFFFFD93D), modifier = Modifier.size(16.dp))
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "CUSTOM PINGLE IMAGE",
                 style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
               )
             }
             Spacer(modifier = Modifier.height(8.dp))
-            androidx.compose.material3.Text(
+            PingleText(
               text = "Spin for at least 2 seconds in total to unlock the ability to upload a custom image and replace the Pringle!",
               style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 11.sp, color = Color.White.copy(alpha = 0.5f)),
               textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
             Spacer(modifier = Modifier.height(8.dp))
-            androidx.compose.material3.Text(
+            PingleText(
               text = String.format(Locale.US, "Progress: %.1fs / 2.0s", (totalSpinDuration / 1000f).coerceAtMost(2.0f)),
               style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD93D))
             )
@@ -2099,7 +2348,7 @@ fun OptionsScreenOld(
                 tint = Color(0xFFFFD93D),
                 modifier = Modifier.size(18.dp)
               )
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "CUSTOM PINGLE IMAGE (UNLOCKED!)",
                 style = TextStyle(
                   fontFamily = FontFamily.SansSerif,
@@ -2118,7 +2367,7 @@ fun OptionsScreenOld(
               horizontalArrangement = Arrangement.SpaceBetween,
               verticalAlignment = Alignment.CenterVertically
             ) {
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "Use Custom Image",
                 style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, color = Color.White)
               )
@@ -2253,13 +2502,13 @@ fun OptionsScreenOld(
               horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
               Icon(imageVector = Icons.Default.Lock, contentDescription = "Locked", tint = Color(0xFFFFD93D), modifier = Modifier.size(16.dp))
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "SPOTIFY INTEGRATION",
                 style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White.copy(alpha = 0.8f))
               )
             }
             Spacer(modifier = Modifier.height(8.dp))
-            androidx.compose.material3.Text(
+            PingleText(
               text = "Unlock Spotify integration after 10 minutes of spin! Connect your account and listen to a random song from a random one of your playlists directly inside the app while spinning.",
               style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 11.sp, color = Color.White.copy(alpha = 0.5f)),
               textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -2267,7 +2516,7 @@ fun OptionsScreenOld(
             Spacer(modifier = Modifier.height(8.dp))
             val currentMins = (totalSpinDuration / 60000L).coerceAtMost(10L)
             val currentSecs = ((totalSpinDuration % 60000L) / 1000L).coerceAtMost(59L)
-            androidx.compose.material3.Text(
+            PingleText(
               text = String.format(Locale.US, "Progress: %d:%02d / 10:00", currentMins, currentSecs),
               style = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFD93D))
             )
@@ -2291,7 +2540,7 @@ fun OptionsScreenOld(
                 tint = Color(0xFF1DB954),
                 modifier = Modifier.size(18.dp)
               )
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "SPOTIFY INTEGRATION (UNLOCKED!)",
                 style = TextStyle(
                   fontFamily = FontFamily.SansSerif,
@@ -2326,7 +2575,7 @@ fun OptionsScreenOld(
                     .padding(vertical = 8.dp),
                   contentAlignment = Alignment.Center
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Standard Login",
                     style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (loginMethod == "simple") Color(0xFF1DB954) else Color.White.copy(alpha = 0.6f))
                   )
@@ -2348,7 +2597,7 @@ fun OptionsScreenOld(
                     .padding(vertical = 8.dp),
                   contentAlignment = Alignment.Center
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Developer Login",
                     style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Bold, color = if (loginMethod == "developer") Color(0xFF1DB954) else Color.White.copy(alpha = 0.6f))
                   )
@@ -2358,7 +2607,7 @@ fun OptionsScreenOld(
               Spacer(modifier = Modifier.height(8.dp))
 
               if (loginMethod == "simple") {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "Login with your Spotify account credentials:",
                   style = TextStyle(fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f))
                 )
@@ -2368,7 +2617,7 @@ fun OptionsScreenOld(
                 OutlinedTextField(
                   value = editUsername,
                   onValueChange = { editUsername = it },
-                  label = { androidx.compose.material3.Text("Spotify Username or Email", color = Color.White.copy(alpha = 0.5f)) },
+                  label = { PingleText("Spotify Username or Email", color = Color.White.copy(alpha = 0.5f)) },
                   textStyle = TextStyle(color = Color.White, fontSize = 12.sp),
                   modifier = Modifier.fillMaxWidth(),
                   colors = TextFieldDefaults.colors(
@@ -2384,7 +2633,7 @@ fun OptionsScreenOld(
                 OutlinedTextField(
                   value = editPassword,
                   onValueChange = { editPassword = it },
-                  label = { androidx.compose.material3.Text("Spotify Password", color = Color.White.copy(alpha = 0.5f)) },
+                  label = { PingleText("Spotify Password", color = Color.White.copy(alpha = 0.5f)) },
                   visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
                   textStyle = TextStyle(color = Color.White, fontSize = 12.sp),
                   modifier = Modifier.fillMaxWidth(),
@@ -2399,7 +2648,7 @@ fun OptionsScreenOld(
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 if (spotifyIsLoading) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Connecting & Authenticating...",
                     style = TextStyle(fontSize = 11.sp, color = Color(0xFFFFD93D))
                   )
@@ -2418,7 +2667,7 @@ fun OptionsScreenOld(
                   )
                 }
               } else {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "Setup your Spotify Developer Credentials to connect your account:",
                   style = TextStyle(fontSize = 11.sp, color = Color.White.copy(alpha = 0.7f))
                 )
@@ -2428,7 +2677,7 @@ fun OptionsScreenOld(
                 OutlinedTextField(
                   value = editClientId,
                   onValueChange = { editClientId = it },
-                  label = { androidx.compose.material3.Text("Spotify Client ID", color = Color.White.copy(alpha = 0.5f)) },
+                  label = { PingleText("Spotify Client ID", color = Color.White.copy(alpha = 0.5f)) },
                   textStyle = TextStyle(color = Color.White, fontSize = 12.sp),
                   modifier = Modifier.fillMaxWidth(),
                   colors = TextFieldDefaults.colors(
@@ -2444,7 +2693,7 @@ fun OptionsScreenOld(
                 OutlinedTextField(
                   value = editClientSecret,
                   onValueChange = { editClientSecret = it },
-                  label = { androidx.compose.material3.Text("Spotify Client Secret", color = Color.White.copy(alpha = 0.5f)) },
+                  label = { PingleText("Spotify Client Secret", color = Color.White.copy(alpha = 0.5f)) },
                   textStyle = TextStyle(color = Color.White, fontSize = 12.sp),
                   modifier = Modifier.fillMaxWidth(),
                   colors = TextFieldDefaults.colors(
@@ -2457,7 +2706,7 @@ fun OptionsScreenOld(
                 
                 Spacer(modifier = Modifier.height(10.dp))
                 
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "How to connect:\n1. Visit developer.spotify.com & log in\n2. Create an App (name: PingleSpin)\n3. Edit Settings: set Redirect URI to:\n    https://localhost/callback\n4. Copy Client ID & Client Secret here and click Connect!",
                   style = TextStyle(fontSize = 9.sp, color = Color.White.copy(alpha = 0.4f), lineHeight = 12.sp)
                 )
@@ -2465,7 +2714,7 @@ fun OptionsScreenOld(
                 Spacer(modifier = Modifier.height(12.dp))
                 
                 if (spotifyIsLoading) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Connecting & Authenticating...",
                     style = TextStyle(fontSize = 11.sp, color = Color(0xFFFFD93D))
                   )
@@ -2490,14 +2739,14 @@ fun OptionsScreenOld(
               } else {
                 "✅ Account Connected Successfully!"
               }
-              androidx.compose.material3.Text(
+              PingleText(
                 text = connectedMsg,
                 style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Color(0xFF1DB954))
               )
               
               Spacer(modifier = Modifier.height(6.dp))
               
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "While spinning in play modes, you will now see the Spotify Player to stream random songs from random playlists in your library!",
                 style = TextStyle(fontSize = 11.sp, color = Color.White.copy(alpha = 0.6f))
               )
@@ -2516,7 +2765,7 @@ fun OptionsScreenOld(
             
             if (spotifyError != null) {
               Spacer(modifier = Modifier.height(8.dp))
-              androidx.compose.material3.Text(
+              PingleText(
                 text = spotifyError ?: "",
                 style = TextStyle(fontSize = 11.sp, color = Color.Red)
               )
@@ -2541,7 +2790,7 @@ fun OptionsScreenOld(
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Connect Spotify",
                     color = Color.White,
                     style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 16.sp)
@@ -2619,7 +2868,7 @@ fun FancyRGBSlider(
     horizontalArrangement = Arrangement.spacedBy(10.dp),
     modifier = Modifier.fillMaxWidth()
   ) {
-    androidx.compose.material3.Text(
+    PingleText(
       text = label,
       style = TextStyle(
         fontFamily = FontFamily.SansSerif,
@@ -2658,7 +2907,7 @@ fun FancyRGBSlider(
       )
     }
 
-    androidx.compose.material3.Text(
+    PingleText(
       text = valueText,
       style = TextStyle(
         color = Color.White.copy(alpha = 0.6f),
@@ -2699,6 +2948,21 @@ fun ManualPlayScreen(
   val easterSpaceStars by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBg by viewModel.easterMatrixBg.collectAsState()
   val invisiblePingleEnabledState by viewModel.invisiblePingleEnabled.collectAsState()
+  val spinVibrationMode by viewModel.spinVibrationMode.collectAsState()
+  val spinVibrationInterval by viewModel.spinVibrationInterval.collectAsState()
+
+  var lastVibratedAngle by remember { mutableFloatStateOf(0f) }
+  LaunchedEffect(rotation, spinVibrationInterval, spinVibrationMode) {
+    if (spinVibrationMode != "none") {
+      val normRotation = (rotation % 360f + 360f) % 360f
+      val diff = Math.abs(normRotation - lastVibratedAngle)
+      val shortestDiff = if (diff > 180f) 360f - diff else diff
+      if (shortestDiff >= spinVibrationInterval) {
+        VibrationHelper.vibrate(context, spinVibrationMode)
+        lastVibratedAngle = normRotation
+      }
+    }
+  }
 
   val isFolded = isFoldedState(threshold = foldAngleThreshold)
   val isFlipFoldable = isFlipStyleFoldable()
@@ -2775,28 +3039,29 @@ fun ManualPlayScreen(
   LaunchedEffect(isFolded, invisiblePingleEnabledState) {
     var lastTime = System.currentTimeMillis()
     while (isActive) {
-      val now = System.currentTimeMillis()
-      val dt = (now - lastTime).coerceIn(1, 100)
-      lastTime = now
+      androidx.compose.runtime.withFrameMillis {
+        val now = System.currentTimeMillis()
+        val dt = (now - lastTime).coerceIn(1, 100)
+        lastTime = now
 
-      if (invisiblePingleEnabledState) {
-        elapsedTimeMs = 0L
-      }
-
-      if (Math.abs(velocity) > 0.05f) {
-        val deltaRot = velocity * (dt / 16f)
-        rotation = (rotation + (if (easterReverseSpin) -deltaRot else deltaRot)) % 360f
-        if (!invisiblePingleEnabledState) {
-          elapsedTimeMs += dt
+        if (invisiblePingleEnabledState) {
+          elapsedTimeMs = 0L
         }
-        // Proportional physics decay based on current friction: 0% friction means infinite spin, 100% means immediate stop
-        // BUT if isFolded is true, friction does not apply!
-        val decay = if (isFolded) 1.0f else (1.0f - (currentFriction / 100f)).coerceIn(0f, 1f)
-        velocity *= decay
-      } else {
-        velocity = 0f
+
+        if (Math.abs(velocity) > 0.05f) {
+          val deltaRot = velocity * (dt / 16f)
+          rotation = (rotation + (if (easterReverseSpin) -deltaRot else deltaRot)) % 360f
+          if (!invisiblePingleEnabledState) {
+            elapsedTimeMs += dt
+          }
+          // Proportional physics decay based on current friction: 0% friction means infinite spin, 100% means immediate stop
+          // BUT if isFolded is true, friction does not apply!
+          val decay = if (isFolded) 1.0f else (1.0f - (currentFriction / 100f)).coerceIn(0f, 1f)
+          velocity *= decay
+        } else {
+          velocity = 0f
+        }
       }
-      delay(16)
     }
   }
 
@@ -2844,13 +3109,23 @@ fun ManualPlayScreen(
           .pointerInput(Unit) {
             detectDragGestures { change, dragAmount ->
               change.consume()
-              // Direct rotation mapping
-              val delta = dragAmount.x + dragAmount.y
-              discAngle = (discAngle + delta) % 360f
-              rotation = (rotation + delta) % 360f
+              
+              val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+              val currentPos = change.position
+              val previousPos = change.previousPosition
+              val currentAngleRad = Math.atan2((currentPos.y - center.y).toDouble(), (currentPos.x - center.x).toDouble())
+              val previousAngleRad = Math.atan2((previousPos.y - center.y).toDouble(), (previousPos.x - center.x).toDouble())
+              var deltaAngleRad = currentAngleRad - previousAngleRad
+              while (deltaAngleRad < -Math.PI) deltaAngleRad += 2 * Math.PI
+              while (deltaAngleRad > Math.PI) deltaAngleRad -= 2 * Math.PI
+
+              val deltaAngleDeg = Math.toDegrees(deltaAngleRad).toFloat()
+
+              discAngle = (discAngle + deltaAngleDeg) % 360f
+              rotation = (rotation + deltaAngleDeg) % 360f
 
               // Direct velocity bump with zero friction decay
-              velocity += delta * 0.2f
+              velocity += deltaAngleDeg * 0.5f
               velocity = velocity.coerceIn(-80f, 80f)
             }
           },
@@ -2958,18 +3233,7 @@ fun ManualPlayScreen(
         )
       }
 
-      Spacer(modifier = Modifier.height((16f - 8f * transitionProgress).dp))
 
-      androidx.compose.material3.Text(
-        text = if (transitionProgress > 0.5f) "Flick or Drag to spin!".uppercase(Locale.US) else "Flick or Drag the Pingle to spin!".uppercase(Locale.US),
-        style = TextStyle(
-          fontFamily = FontFamily.SansSerif,
-          fontSize = (11f - 1f * transitionProgress).sp,
-          fontWeight = FontWeight.Medium,
-          color = Color.White.copy(alpha = 0.4f),
-          letterSpacing = 2.sp
-        )
-      )
     }
 
     // 2. Header Row (Timer, Sensing Active Badge, Check Button) sliding down/up
@@ -2999,7 +3263,7 @@ fun ManualPlayScreen(
         val timerSize = (24f + 4f * transitionProgress).sp
         val timerWeight = if (transitionProgress > 0.5f) FontWeight.SemiBold else FontWeight.Medium
         val timerAlpha = 0.85f + 0.05f * transitionProgress
-        androidx.compose.material3.Text(
+        PingleText(
           text = formattedTime,
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -3253,6 +3517,8 @@ fun DefaultPreview() {
       isManualUnlocked = false,
       useCustomImage = false,
       pingleCustomImageUri = null,
+      showLoadingSequence = false,
+      onLoadingFinished = {},
       onUnlockManual = {},
       onPlayClicked = {},
       onManualSpinClicked = {},
@@ -3315,7 +3581,7 @@ fun SpotifyPlayerWidget(
                             tint = Color(0xFF1DB954),
                             modifier = Modifier.size(20.dp)
                         )
-                        androidx.compose.material3.Text(
+                        PingleText(
                             text = "Spotify Playlist Player",
                             style = TextStyle(
                                 color = Color.White,
@@ -3343,7 +3609,7 @@ fun SpotifyPlayerWidget(
                                 }
                                 .padding(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            androidx.compose.material3.Text(
+                            PingleText(
                                 text = "PLAY RANDOM SONG",
                                 style = TextStyle(
                                     color = Color(0xFF1DB954),
@@ -3393,7 +3659,7 @@ fun SpotifyPlayerWidget(
                     Column(
                         modifier = Modifier.weight(1f)
                     ) {
-                        androidx.compose.material3.Text(
+                        PingleText(
                             text = track.name,
                             style = TextStyle(
                                 color = Color.White,
@@ -3404,7 +3670,7 @@ fun SpotifyPlayerWidget(
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
-                        androidx.compose.material3.Text(
+                        PingleText(
                             text = track.artist,
                             style = TextStyle(
                                 color = Color.White.copy(alpha = 0.6f),
@@ -3468,7 +3734,7 @@ fun SpotifyPlayerWidget(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                         text = if (track.previewUrl == null) "No preview available" else "Streaming preview track",
                         style = TextStyle(color = Color.White.copy(alpha = 0.4f), fontSize = 9.sp)
                     )
@@ -3488,7 +3754,7 @@ fun SpotifyPlayerWidget(
                             }
                             .padding(vertical = 2.dp, horizontal = 6.dp)
                     ) {
-                        androidx.compose.material3.Text(
+                        PingleText(
                             text = "OPEN IN SPOTIFY ↗",
                             style = TextStyle(
                                 color = Color(0xFF1DB954),
@@ -3501,7 +3767,7 @@ fun SpotifyPlayerWidget(
             }
 
             if (error != null) {
-                androidx.compose.material3.Text(
+                PingleText(
                     text = error ?: "",
                     style = TextStyle(color = Color.Red, fontSize = 10.sp),
                     modifier = Modifier.padding(top = 4.dp),
@@ -3543,7 +3809,7 @@ fun PinguiSetupScreen(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        androidx.compose.material3.Text(
+        PingleText(
           text = "PINGUI SETUP",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -3601,7 +3867,7 @@ fun PinguiSetupScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        androidx.compose.material3.Text(
+        PingleText(
           text = "LAYOUT EDITOR",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -3614,7 +3880,7 @@ fun PinguiSetupScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        androidx.compose.material3.Text(
+        PingleText(
           text = "Customize your game screen elements exactly the way you want!\n\nModify size, position, and tilt angles for the Spinning Pingle, Timer, Spotify Widget, and the Fold Mode Controller to create your custom UI experience.",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -3656,14 +3922,21 @@ fun PinguiGameEditScreen(
   }
 
   var currentPageIndex by remember { mutableStateOf(0) }
+  var showWarningDialog by remember { mutableStateOf(false) }
   val currentConfig = editPages.getOrElse(currentPageIndex) { "normal" }
 
   // 2. Load active parameters when page changes
+  val totalSpinDuration by viewModel.totalSpinDuration.collectAsState()
+  val isSpotifyUnlocked = totalSpinDuration >= 600000L
   var selectedElement by remember { mutableStateOf("pingle") }
-  LaunchedEffect(currentPageIndex, isFlipStyle) {
+  val showDisc = isFlipStyle && currentConfig == "folded_psm"
+
+  LaunchedEffect(currentPageIndex, isFlipStyle, isSpotifyUnlocked) {
     viewModel.loadActiveLayoutForConfig(currentConfig)
-    val showDisc = currentConfig == "psm" || currentConfig == "unfolded_psm" || currentConfig == "folded_psm"
     if (!showDisc && selectedElement == "fold disc") {
+      selectedElement = "pingle"
+    }
+    if (!isSpotifyUnlocked && selectedElement == "spotify") {
       selectedElement = "pingle"
     }
   }
@@ -3692,14 +3965,25 @@ fun PinguiGameEditScreen(
   val useCustomImage by viewModel.useCustomImage.collectAsState()
   val pingleCustomImageUri by viewModel.pingleCustomImageUri.collectAsState()
 
+  fun isAnyElementOffScreen(): Boolean {
+    val limitX = 180f
+    val limitY = 380f
+    val pingleOff = Math.abs(pingleOffsetX) > limitX || Math.abs(pingleOffsetY) > limitY
+    val timerOff = Math.abs(timerOffsetX) > limitX || Math.abs(timerOffsetY) > limitY
+    val spotifyOff = isSpotifyUnlocked && (Math.abs(spotifyOffsetX) > limitX || Math.abs(spotifyOffsetY) > limitY)
+    val discOff = showDisc && (Math.abs(discOffsetX) > limitX || Math.abs(discOffsetY) > limitY)
+    return pingleOff || timerOff || spotifyOff || discOff
+  }
+
+  val isConfigFolded = currentConfig.startsWith("folded")
+  val isConfigPsm = currentConfig.endsWith("psm") || currentConfig == "psm"
+  val editTransitionProgress = if (isConfigFolded) 1f else 0f
   val density = androidx.compose.ui.platform.LocalDensity.current.density
 
   Box(
     modifier = Modifier
       .fillMaxSize()
       .pingleBackground(easterSpaceStars, easterMatrixBg)
-      .statusBarsPadding()
-      .navigationBarsPadding()
       .testTag("pingui_edit_viewport")
       // Handle multi-touch gestures globally on the viewport for the selected element
       .pointerInput(selectedElement) {
@@ -3720,10 +4004,12 @@ fun PinguiGameEditScreen(
               viewModel.setTimerTilt((viewModel.timerTilt.value + rotation) % 360f)
             }
             "spotify" -> {
-              viewModel.setSpotifyOffsetX((viewModel.spotifyOffsetX.value + panDpX).coerceIn(-400f, 400f))
-              viewModel.setSpotifyOffsetY((viewModel.spotifyOffsetY.value + panDpY).coerceIn(-600f, 600f))
-              viewModel.setSpotifyScale((viewModel.spotifyScale.value * zoom).coerceIn(0.4f, 4.0f))
-              viewModel.setSpotifyTilt((viewModel.spotifyTilt.value + rotation) % 360f)
+              if (isSpotifyUnlocked) {
+                viewModel.setSpotifyOffsetX((viewModel.spotifyOffsetX.value + panDpX).coerceIn(-400f, 400f))
+                viewModel.setSpotifyOffsetY((viewModel.spotifyOffsetY.value + panDpY).coerceIn(-600f, 600f))
+                viewModel.setSpotifyScale((viewModel.spotifyScale.value * zoom).coerceIn(0.4f, 4.0f))
+                viewModel.setSpotifyTilt((viewModel.spotifyTilt.value + rotation) % 360f)
+              }
             }
             "fold disc" -> {
               viewModel.setDiscOffsetX((viewModel.discOffsetX.value + panDpX).coerceIn(-400f, 400f))
@@ -3735,11 +4021,54 @@ fun PinguiGameEditScreen(
         }
       }
   ) {
+    if (isConfigFolded) {
+      Box(
+        modifier = Modifier
+          .fillMaxWidth()
+          .align(Alignment.Center)
+          .height(30.dp),
+        contentAlignment = Alignment.Center
+      ) {
+        androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+          val path = androidx.compose.ui.graphics.Path()
+          val numTeeth = (size.width / 12f).toInt().coerceAtLeast(20)
+          val toothWidth = size.width / numTeeth
+          val midY = size.height / 2f
+          val amp = 6f
+          path.moveTo(0f, midY)
+          for (i in 0..numTeeth) {
+            val x = i * toothWidth
+            val y = midY + if (i % 2 == 0) -amp else amp
+            path.lineTo(x, y)
+          }
+          drawPath(
+            path = path,
+            color = Color(0xFFFF9900),
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
+          )
+        }
+        // Small text indicating fold
+        PingleText(
+          text = "FOLD AXIS",
+          style = TextStyle(
+            color = Color(0xFFFF9900).copy(alpha = 0.8f),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 2.sp
+          ),
+          modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .align(Alignment.Center)
+        )
+      }
+    }
+
     // 1. Spinning Pingle Preview
     val isPingleSelected = selectedElement == "pingle"
-    Box(
+    Column(
       modifier = Modifier
-        .align(Alignment.Center)
+        .align(BiasAlignment(0f, -0.5f * editTransitionProgress))
         .offset(x = pingleOffsetX.dp, y = pingleOffsetY.dp)
         .graphicsLayer(
           scaleX = pingleScale,
@@ -3758,13 +4087,29 @@ fun PinguiGameEditScreen(
           selectedElement = "pingle"
         }
         .padding(12.dp),
-      contentAlignment = Alignment.Center
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.Center
     ) {
-      val pingleSize = 200.dp
-      Box(contentAlignment = Alignment.Center) {
+      val pringleSize = if (isConfigPsm) {
+        (260f - 40f * editTransitionProgress).dp
+      } else {
+        (260f - 20f * editTransitionProgress).dp
+      }
+      val pringleContainerSize = if (isConfigPsm) {
+        (320f - 40f * editTransitionProgress).dp
+      } else {
+        320.dp
+      }
+      val containerHeight = if (isConfigPsm) {
+        (200f - 20f * editTransitionProgress).dp
+      } else {
+        200.dp
+      }
+
+      Box(contentAlignment = Alignment.Center, modifier = Modifier.size(pringleContainerSize, containerHeight)) {
         Box(
           modifier = Modifier
-            .size(260.dp, 140.dp)
+            .size(pringleContainerSize, containerHeight)
             .background(
               Brush.radialGradient(
                 colors = listOf(
@@ -3780,7 +4125,7 @@ fun PinguiGameEditScreen(
           customImageUri = pingleCustomImageUri,
           contentDescription = "Spinning Pingle Preview",
           modifier = Modifier
-            .size(pingleSize)
+            .size(pringleSize)
             .testTag("edit_pingle_image"),
           contentScale = ContentScale.Fit
         )
@@ -3789,11 +4134,14 @@ fun PinguiGameEditScreen(
 
     // 2. Timer (Header Row) Preview
     val isTimerSelected = selectedElement == "timer"
-    Row(
+    val statusBarPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val headerTopPadding = (statusBarPadding.value * (1f - editTransitionProgress)).dp
+    val headerHorizontalPadding = (24f - 8f * editTransitionProgress).dp
+    val headerVerticalPadding = (20f - 12f * editTransitionProgress).dp
+
+    Box(
       modifier = Modifier
-        .fillMaxWidth()
-        .align(Alignment.TopCenter)
-        .padding(top = 160.dp) // clear help card
+        .align(BiasAlignment(0f, -1.0f + 1.5f * editTransitionProgress))
         .offset(x = timerOffsetX.dp, y = timerOffsetY.dp)
         .graphicsLayer(
           scaleX = timerScale,
@@ -3811,82 +4159,83 @@ fun PinguiGameEditScreen(
         ) {
           selectedElement = "timer"
         }
-        .padding(12.dp)
-        .padding(horizontal = 24.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically
+        .padding(top = headerTopPadding)
+        .padding(horizontal = headerHorizontalPadding, vertical = headerVerticalPadding)
     ) {
-      androidx.compose.material3.Text(
-        text = "04.28",
-        style = TextStyle(
-          fontFamily = FontFamily.SansSerif,
-          fontSize = 24.sp,
-          fontWeight = FontWeight.Medium,
-          color = Color.White.copy(alpha = 0.85f),
-          letterSpacing = (-0.5).sp
-        )
-      )
-
-      Box(
-        modifier = Modifier
-          .size(44.dp)
-          .border(
-            width = 1.dp,
-            color = Color.White.copy(alpha = 0.15f),
-            shape = RoundedCornerShape(12.dp)
-          )
-          .background(Color.White.copy(alpha = 0.05f), shape = RoundedCornerShape(12.dp)),
-        contentAlignment = Alignment.Center
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
       ) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = "Mock Check",
-          tint = Color.White,
-          modifier = Modifier.size(20.dp)
+        val timerSize = (24f + 4f * editTransitionProgress).sp
+        PingleText(
+          text = "04.28",
+          style = TextStyle(
+            fontFamily = FontFamily.SansSerif,
+            fontSize = timerSize,
+            fontWeight = FontWeight.Medium,
+            color = Color.White.copy(alpha = 0.85f),
+            letterSpacing = (-0.5).sp
+          )
         )
+
+        Box(
+          modifier = Modifier
+            .size((48f + 4f * editTransitionProgress).dp)
+            .border(
+              width = 1.dp,
+              color = Color.White.copy(alpha = 0.15f),
+              shape = RoundedCornerShape(12.dp)
+            )
+            .background(Color.White.copy(alpha = 0.05f), shape = RoundedCornerShape(12.dp)),
+          contentAlignment = Alignment.Center
+        ) {
+          Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = "Mock Check",
+            tint = Color.White,
+            modifier = Modifier.size((24f + 2f * editTransitionProgress).dp)
+          )
+        }
       }
     }
 
     // 3. Spotify Widget Preview
-    val isSpotifySelected = selectedElement == "spotify"
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .align(Alignment.BottomCenter)
-        .padding(bottom = 260.dp)
-        .offset(x = spotifyOffsetX.dp, y = spotifyOffsetY.dp)
-        .graphicsLayer(
-          scaleX = spotifyScale,
-          scaleY = spotifyScale,
-          rotationZ = spotifyTilt
-        )
-        .border(
-          width = if (isSpotifySelected) 2.dp else 0.dp,
-          color = if (isSpotifySelected) Color(0xFF00FFCC) else Color.Transparent,
-          shape = RoundedCornerShape(16.dp)
-        )
-        .clickable(
-          interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-          indication = null
-        ) {
-          selectedElement = "spotify"
-        }
-        .padding(12.dp),
-      contentAlignment = Alignment.Center
-    ) {
-      SpotifyPlayerWidget(
-        modifier = Modifier.padding(bottom = 16.dp)
-      )
+    if (isSpotifyUnlocked) {
+      val isSpotifySelected = selectedElement == "spotify"
+      Box(
+        modifier = Modifier
+          .align(Alignment.BottomCenter)
+          .navigationBarsPadding()
+          .padding(bottom = 16.dp)
+          .offset(x = spotifyOffsetX.dp, y = spotifyOffsetY.dp)
+          .graphicsLayer(
+            scaleX = spotifyScale,
+            scaleY = spotifyScale,
+            rotationZ = spotifyTilt
+          )
+          .border(
+            width = if (isSpotifySelected) 2.dp else 0.dp,
+            color = if (isSpotifySelected) Color(0xFF00FFCC) else Color.Transparent,
+            shape = RoundedCornerShape(16.dp)
+          )
+          .clickable(
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+            indication = null
+          ) {
+            selectedElement = "spotify"
+          }
+      ) {
+        SpotifyPlayerWidget()
+      }
     }
 
-    // 4. Disc Controller Preview (Only shown if manual psm is active)
-    val showDisc = currentConfig == "psm" || currentConfig == "unfolded_psm" || currentConfig == "folded_psm"
+    // 4. Disc Controller Preview (Only shown on pinglespinmanual (folded))
     if (showDisc) {
       val isDiscSelected = selectedElement == "fold disc"
       Box(
         modifier = Modifier
-          .align(Alignment.BottomCenter)
-          .padding(bottom = 260.dp) // position next to spotify
+          .align(BiasAlignment(0f, 1.15f - 0.65f * editTransitionProgress))
           .offset(x = discOffsetX.dp, y = discOffsetY.dp)
           .graphicsLayer(
             scaleX = discScale,
@@ -3904,19 +4253,13 @@ fun PinguiGameEditScreen(
           ) {
             selectedElement = "fold disc"
           }
-          .padding(16.dp),
-        contentAlignment = Alignment.Center
       ) {
         // Flat grey disc (CD) body
         Box(
           modifier = Modifier
-            .size(120.dp)
+            .size(170.dp)
             .background(Color(0xFFB0B0B0), androidx.compose.foundation.shape.CircleShape)
-            .border(
-              width = if (isDiscSelected) 2.5.dp else 1.5.dp,
-              color = if (isDiscSelected) Color(0xFF00FFCC) else Color(0xFF8E8E8E),
-              shape = androidx.compose.foundation.shape.CircleShape
-            ),
+            .border(2.dp, Color(0xFF8E8E8E), androidx.compose.foundation.shape.CircleShape),
           contentAlignment = Alignment.Center
         ) {
           androidx.compose.foundation.Canvas(
@@ -3937,7 +4280,7 @@ fun PinguiGameEditScreen(
               color = Color(0xFFFF3B30),
               start = androidx.compose.ui.geometry.Offset(ctr.x + r * 0.25f, ctr.y),
               end = androidx.compose.ui.geometry.Offset(ctr.x + r, ctr.y),
-              strokeWidth = 5f,
+              strokeWidth = 6f,
               cap = androidx.compose.ui.graphics.StrokeCap.Round
             )
           }
@@ -3945,52 +4288,23 @@ fun PinguiGameEditScreen(
           // Black circle in the middle (looks like a CD spindle hole)
           Box(
             modifier = Modifier
-              .size(30.dp) // ~25% of 120.dp is 30.dp
+              .size(42.dp)
               .background(Color.Black, androidx.compose.foundation.shape.CircleShape)
-              .border(1.dp, Color(0xFF6E6E6E), androidx.compose.foundation.shape.CircleShape)
+              .border(1.5.dp, Color(0xFF6E6E6E), androidx.compose.foundation.shape.CircleShape)
           )
         }
       }
     }
 
-    // 5. Floating Instructions / Help Card
-    Box(
-      modifier = Modifier
-        .align(Alignment.TopCenter)
-        .padding(top = 24.dp)
-        .padding(horizontal = 24.dp)
-        .background(Color.Black.copy(alpha = 0.85f), RoundedCornerShape(16.dp))
-        .border(1.dp, Color(0xFF00FFCC).copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-        .padding(horizontal = 20.dp, vertical = 12.dp)
-    ) {
-      Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        androidx.compose.material3.Text(
-          text = "PINGUI SETUP",
-          style = TextStyle(
-            color = Color(0xFF00FFCC),
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 2.sp
-          )
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        androidx.compose.material3.Text(
-          text = "Tap any element to select, then Pinch/Drag/Twist directly to customize size, location, and tilt!",
-          style = TextStyle(
-            color = Color.White.copy(alpha = 0.8f),
-            fontSize = 11.sp,
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
-          )
-        )
-      }
-    }
+
 
     // 6. Bottom Selection Tabs and Navigation Bar
     Column(
       modifier = Modifier
         .align(Alignment.BottomCenter)
         .fillMaxWidth()
-        .background(Color.Black.copy(alpha = 0.9f))
+        .navigationBarsPadding()
+        .background(Color.Black.copy(alpha = 0.85f))
         .border(width = 1.dp, color = Color.White.copy(alpha = 0.12f))
         .padding(bottom = 16.dp, top = 16.dp)
         .padding(horizontal = 24.dp),
@@ -3998,7 +4312,16 @@ fun PinguiGameEditScreen(
       horizontalAlignment = Alignment.CenterHorizontally
     ) {
       // Element Selection Tabs
-      val tabs = if (showDisc) listOf("pingle", "timer", "spotify", "fold disc") else listOf("pingle", "timer", "spotify")
+      val tabs = buildList {
+        add("pingle")
+        add("timer")
+        if (isSpotifyUnlocked) {
+          add("spotify")
+        }
+        if (showDisc) {
+          add("fold disc")
+        }
+      }
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -4021,7 +4344,7 @@ fun PinguiGameEditScreen(
               .padding(vertical = 10.dp),
             contentAlignment = Alignment.Center
           ) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = tab.uppercase(Locale.US),
               style = TextStyle(
                 fontSize = 10.sp,
@@ -4053,7 +4376,7 @@ fun PinguiGameEditScreen(
                 .padding(horizontal = 14.dp, vertical = 8.dp),
               contentAlignment = Alignment.Center
             ) {
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "PREV",
                 style = TextStyle(
                   color = Color.White.copy(alpha = 0.7f),
@@ -4071,7 +4394,7 @@ fun PinguiGameEditScreen(
                 .clickable { onBackClicked() },
               contentAlignment = Alignment.Center
             ) {
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "CLOSE",
                 style = TextStyle(
                   color = Color.White.copy(alpha = 0.7f),
@@ -4094,7 +4417,7 @@ fun PinguiGameEditScreen(
               .padding(horizontal = 14.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center
           ) {
-            androidx.compose.material3.Text(
+            PingleText(
               text = "RESET",
               style = TextStyle(
                 color = Color.White.copy(alpha = 0.5f),
@@ -4116,7 +4439,7 @@ fun PinguiGameEditScreen(
           "folded_psm" -> "Folded PSM"
           else -> "Custom UI"
         }
-        androidx.compose.material3.Text(
+        PingleText(
           text = "${currentPageIndex + 1}/${editPages.size}: $pageTitle".uppercase(Locale.US),
           style = TextStyle(
             color = Color.White.copy(alpha = 0.85f),
@@ -4137,7 +4460,11 @@ fun PinguiGameEditScreen(
             .clickable {
               viewModel.saveActiveLayoutForConfig(currentConfig)
               if (isLastPage) {
-                onBackClicked()
+                if (isAnyElementOffScreen()) {
+                  showWarningDialog = true
+                } else {
+                  onBackClicked()
+                }
               } else {
                 currentPageIndex++
               }
@@ -4145,7 +4472,7 @@ fun PinguiGameEditScreen(
             .padding(horizontal = 18.dp, vertical = 8.dp),
           contentAlignment = Alignment.Center
         ) {
-          androidx.compose.material3.Text(
+          PingleText(
             text = nextText,
             style = TextStyle(
               color = Color(0xFF00FFCC),
@@ -4156,6 +4483,59 @@ fun PinguiGameEditScreen(
           )
         }
       }
+    }
+
+    if (showWarningDialog) {
+      androidx.compose.material3.AlertDialog(
+        onDismissRequest = { showWarningDialog = false },
+        title = {
+          PingleText(
+            text = " WARNING",
+            style = TextStyle(
+              fontWeight = FontWeight.Bold,
+              fontSize = 18.sp,
+              color = Color.Red
+            )
+          )
+        },
+        text = {
+          PingleText(
+            text = "some ui elements are going to be shown off screen due to current settings ",
+            style = TextStyle(
+              fontSize = 14.sp,
+              color = Color.White
+            )
+          )
+        },
+        confirmButton = {
+          androidx.compose.material3.TextButton(
+            onClick = {
+              showWarningDialog = false
+              onBackClicked()
+            }
+          ) {
+            PingleText(
+              text = " continue",
+              style = TextStyle(color = Color(0xFF00FFCC), fontWeight = FontWeight.Bold)
+            )
+          }
+        },
+        dismissButton = {
+          androidx.compose.material3.TextButton(
+            onClick = {
+              showWarningDialog = false
+            }
+          ) {
+            PingleText(
+              text = " redo setup",
+              style = TextStyle(color = Color.White.copy(alpha = 0.6f))
+            )
+          }
+        },
+        containerColor = Color(0xFF1C1C1E),
+        textContentColor = Color.White,
+        titleContentColor = Color.Red
+      )
     }
   }
 }

@@ -12,6 +12,10 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import android.graphics.BitmapFactory
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import com.example.R
 
 enum class Screen {
     HOME, PLAY, HIGH_SCORES, OPTIONS, MANUAL, PINGUI_SETUP, PINGUI_GAME_EDIT
@@ -40,6 +44,63 @@ class PingleViewModel(application: Application) : AndroidViewModel(application) 
     val pingleFoldAngleThreshold = MutableStateFlow(prefs.getFloat("pingle_fold_angle_threshold", 120.0f))
     val pingleCustomImageUri = MutableStateFlow(prefs.getString("pingle_custom_image_uri", null))
     val useCustomImage = MutableStateFlow(prefs.getBoolean("use_custom_image", false))
+    val customMediaType = MutableStateFlow(prefs.getString("custom_media_type", "image") ?: "image")
+
+    val loadEverything = MutableStateFlow(prefs.getBoolean("load_everything", false))
+
+    var preloadedPurePringle: ImageBitmap? = null
+    var preloadedSinglePringle: ImageBitmap? = null
+    var preloadedPringle: ImageBitmap? = null
+    var preloadedAppIcon: ImageBitmap? = null
+
+    init {
+        if (loadEverything.value) {
+            preloadAllAssets(application)
+        }
+    }
+
+    fun preloadAllAssets(context: Context) {
+        viewModelScope.launch {
+            try {
+                val res = context.resources
+                preloadedPurePringle = BitmapFactory.decodeResource(res, R.drawable.img_pure_pringle_1780498841768)?.asImageBitmap()
+                preloadedSinglePringle = BitmapFactory.decodeResource(res, R.drawable.img_single_pringle_1780498663196)?.asImageBitmap()
+                preloadedPringle = BitmapFactory.decodeResource(res, R.drawable.img_pringle_1780497785206)?.asImageBitmap()
+                preloadedAppIcon = BitmapFactory.decodeResource(res, R.drawable.img_app_icon_1780497806731)?.asImageBitmap()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun clearPreloadedAssets() {
+        preloadedPurePringle = null
+        preloadedSinglePringle = null
+        preloadedPringle = null
+        preloadedAppIcon = null
+    }
+
+    fun setLoadEverything(enabled: Boolean, context: Context): Boolean {
+        if (enabled) {
+            val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+            val memoryInfo = android.app.ActivityManager.MemoryInfo()
+            activityManager?.getMemoryInfo(memoryInfo)
+            val totalRamBytes = memoryInfo.totalMem
+            val thresholdBytes = 6L * 1024L * 1024L * 1024L // 6 GB
+            
+            if (totalRamBytes < thresholdBytes) {
+                return false
+            }
+        }
+        loadEverything.value = enabled
+        prefs.edit().putBoolean("load_everything", enabled).apply()
+        if (enabled) {
+            preloadAllAssets(context)
+        } else {
+            clearPreloadedAssets()
+        }
+        return true
+    }
 
     val normalLayout = MutableStateFlow(loadLayoutConfig("normal"))
     val psmLayout = MutableStateFlow(loadLayoutConfig("psm"))
@@ -293,62 +354,27 @@ class PingleViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     val isDebugUnlocked = MutableStateFlow(prefs.getBoolean("debug_unlocked", false))
-    val easterRainbowNeon = MutableStateFlow(prefs.getBoolean("ee_rainbow_neon", false))
-    val easterMatrixBg = MutableStateFlow(prefs.getBoolean("ee_matrix_bg", false))
-    val easterReverseSpin = MutableStateFlow(prefs.getBoolean("ee_reverse_spin", false))
-    val easterSpaceStars = MutableStateFlow(prefs.getBoolean("ee_space_stars", false))
+    val easterRainbowNeon = MutableStateFlow(false)
+    val easterMatrixBg = MutableStateFlow(false)
+    val easterReverseSpin = MutableStateFlow(false)
+    val easterSpaceStars = MutableStateFlow(false)
 
-    val isRainbowNeonUnlocked = MutableStateFlow(prefs.getBoolean("ee_rainbow_neon_unlocked", false))
-    val isMatrixBgUnlocked = MutableStateFlow(prefs.getBoolean("ee_matrix_bg_unlocked", false))
-    val isReverseSpinUnlocked = MutableStateFlow(prefs.getBoolean("ee_reverse_spin_unlocked", false))
-    val isSpaceStarsUnlocked = MutableStateFlow(prefs.getBoolean("ee_space_stars_unlocked", false))
+    val isRainbowNeonUnlocked = MutableStateFlow(false)
+    val isMatrixBgUnlocked = MutableStateFlow(false)
+    val isReverseSpinUnlocked = MutableStateFlow(false)
+    val isSpaceStarsUnlocked = MutableStateFlow(false)
 
-    val invisiblePingleEnabled = MutableStateFlow(prefs.getBoolean("ee_invisible_pingle", false))
+    val invisiblePingleEnabled = MutableStateFlow(false)
 
-    fun setInvisiblePingleEnabled(enabled: Boolean) {
-        invisiblePingleEnabled.value = enabled
-        prefs.edit().putBoolean("ee_invisible_pingle", enabled).apply()
-    }
-
-    fun setEasterRainbowNeon(enabled: Boolean) {
-        easterRainbowNeon.value = enabled
-        prefs.edit().putBoolean("ee_rainbow_neon", enabled).apply()
-    }
-
-    fun setEasterMatrixBg(enabled: Boolean) {
-        easterMatrixBg.value = enabled
-        prefs.edit().putBoolean("ee_matrix_bg", enabled).apply()
-    }
-
-    fun setEasterReverseSpin(enabled: Boolean) {
-        easterReverseSpin.value = enabled
-        prefs.edit().putBoolean("ee_reverse_spin", enabled).apply()
-    }
-
-    fun setEasterSpaceStars(enabled: Boolean) {
-        easterSpaceStars.value = enabled
-        prefs.edit().putBoolean("ee_space_stars", enabled).apply()
-    }
-
-    fun setRainbowNeonUnlocked(unlocked: Boolean) {
-        isRainbowNeonUnlocked.value = unlocked
-        prefs.edit().putBoolean("ee_rainbow_neon_unlocked", unlocked).apply()
-    }
-
-    fun setMatrixBgUnlocked(unlocked: Boolean) {
-        isMatrixBgUnlocked.value = unlocked
-        prefs.edit().putBoolean("ee_matrix_bg_unlocked", unlocked).apply()
-    }
-
-    fun setReverseSpinUnlocked(unlocked: Boolean) {
-        isReverseSpinUnlocked.value = unlocked
-        prefs.edit().putBoolean("ee_reverse_spin_unlocked", unlocked).apply()
-    }
-
-    fun setSpaceStarsUnlocked(unlocked: Boolean) {
-        isSpaceStarsUnlocked.value = unlocked
-        prefs.edit().putBoolean("ee_space_stars_unlocked", unlocked).apply()
-    }
+    fun setInvisiblePingleEnabled(enabled: Boolean) {}
+    fun setEasterRainbowNeon(enabled: Boolean) {}
+    fun setEasterMatrixBg(enabled: Boolean) {}
+    fun setEasterReverseSpin(enabled: Boolean) {}
+    fun setEasterSpaceStars(enabled: Boolean) {}
+    fun setRainbowNeonUnlocked(unlocked: Boolean) {}
+    fun setMatrixBgUnlocked(unlocked: Boolean) {}
+    fun setReverseSpinUnlocked(unlocked: Boolean) {}
+    fun setSpaceStarsUnlocked(unlocked: Boolean) {}
 
     fun setDebugUnlocked(unlocked: Boolean) {
         isDebugUnlocked.value = unlocked
@@ -358,6 +384,11 @@ class PingleViewModel(application: Application) : AndroidViewModel(application) 
     fun setCustomImageUri(uriString: String?) {
         pingleCustomImageUri.value = uriString
         prefs.edit().putString("pingle_custom_image_uri", uriString).apply()
+    }
+
+    fun setCustomMediaType(type: String) {
+        customMediaType.value = type
+        prefs.edit().putString("custom_media_type", type).apply()
     }
 
     fun setUseCustomImage(use: Boolean) {
@@ -397,14 +428,6 @@ class PingleViewModel(application: Application) : AndroidViewModel(application) 
         prefs.edit().putBoolean("manual_unlocked", true).apply()
         isDebugUnlocked.value = true
         prefs.edit().putBoolean("debug_unlocked", true).apply()
-        isRainbowNeonUnlocked.value = true
-        prefs.edit().putBoolean("ee_rainbow_neon_unlocked", true).apply()
-        isMatrixBgUnlocked.value = true
-        prefs.edit().putBoolean("ee_matrix_bg_unlocked", true).apply()
-        isReverseSpinUnlocked.value = true
-        prefs.edit().putBoolean("ee_reverse_spin_unlocked", true).apply()
-        isSpaceStarsUnlocked.value = true
-        prefs.edit().putBoolean("ee_space_stars_unlocked", true).apply()
 
         val targetDuration = 18000000L // 5 hours in ms
         if (totalSpinDuration.value < targetDuration) {
@@ -414,22 +437,7 @@ class PingleViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun checkEasterEggUnlocks(durationMs: Long, totalDuration: Long) {
-        if (durationMs >= 15000L && !isReverseSpinUnlocked.value) {
-            isReverseSpinUnlocked.value = true
-            prefs.edit().putBoolean("ee_reverse_spin_unlocked", true).apply()
-        }
-        if (durationMs >= 30000L && !isMatrixBgUnlocked.value) {
-            isMatrixBgUnlocked.value = true
-            prefs.edit().putBoolean("ee_matrix_bg_unlocked", true).apply()
-        }
-        if (totalDuration >= 300000L && !isSpaceStarsUnlocked.value) {
-            isSpaceStarsUnlocked.value = true
-            prefs.edit().putBoolean("ee_space_stars_unlocked", true).apply()
-        }
-        if (totalDuration >= 60000L && !isRainbowNeonUnlocked.value) {
-            isRainbowNeonUnlocked.value = true
-            prefs.edit().putBoolean("ee_rainbow_neon_unlocked", true).apply()
-        }
+        // disabled
     }
 
     fun adjustSpeed(increase: Boolean) {
@@ -486,6 +494,34 @@ class PingleViewModel(application: Application) : AndroidViewModel(application) 
             prefs.edit().putLong("total_spin_duration", 0L).apply()
             totalSpinDuration.value = 0L
         }
+    }
+
+    val buttonVibrationMode = MutableStateFlow(prefs.getString("button_vibration_mode", "medium") ?: "medium")
+    val spinVibrationMode = MutableStateFlow(prefs.getString("spin_vibration_mode", "light") ?: "light")
+    val spinVibrationInterval = MutableStateFlow(prefs.getFloat("spin_vibration_interval", 15.0f))
+
+    fun setButtonVibrationMode(mode: String) {
+        buttonVibrationMode.value = mode
+        prefs.edit().putString("button_vibration_mode", mode).apply()
+    }
+
+    fun setSpinVibrationMode(mode: String) {
+        spinVibrationMode.value = mode
+        prefs.edit().putString("spin_vibration_mode", mode).apply()
+    }
+
+    fun setSpinVibrationInterval(interval: Float) {
+        val rounded = Math.round(interval * 10f) / 10f
+        val clamped = rounded.coerceIn(5.0f, 90.0f)
+        spinVibrationInterval.value = clamped
+        prefs.edit().putFloat("spin_vibration_interval", clamped).apply()
+    }
+
+    val isChineseCrashed = MutableStateFlow(prefs.getBoolean("is_chinese_crashed", false))
+
+    fun triggerChineseCrash() {
+        isChineseCrashed.value = true
+        prefs.edit().putBoolean("is_chinese_crashed", true).apply()
     }
 }
 

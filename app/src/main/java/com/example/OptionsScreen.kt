@@ -41,6 +41,11 @@ import java.util.Locale
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.geometry.Offset
 
 @Composable
 fun OptionsScreen(
@@ -81,6 +86,10 @@ fun OptionsScreen(
   val scope = rememberCoroutineScope()
   val easterSpaceStarsState by viewModel.easterSpaceStars.collectAsState()
   val easterMatrixBgState by viewModel.easterMatrixBg.collectAsState()
+  val loadEverythingState by viewModel.loadEverything.collectAsState()
+  val buttonVibrationMode by viewModel.buttonVibrationMode.collectAsState()
+  val spinVibrationMode by viewModel.spinVibrationMode.collectAsState()
+  val spinVibrationInterval by viewModel.spinVibrationInterval.collectAsState()
 
   val visibleTabs = remember {
     listOf("customisation", "special", "easter eggs", "debug", "request features")
@@ -106,32 +115,82 @@ fun OptionsScreen(
   val density = LocalDensity.current
   val pagerOffset: Float = pagerState.currentPage + pagerState.currentPageOffsetFraction
   val headerScrollState = rememberScrollState()
+  var colorPickerMode by remember { mutableStateOf("wheel") }
 
   LaunchedEffect(pagerOffset) {
     val scrollTargetPx = with(density) { (pagerOffset * 80.dp.toPx()).toInt() }
     headerScrollState.scrollTo(scrollTargetPx)
   }
 
-  // Custom Image picker contract
+  // Helper to extract file name from Uri
+  fun getFileName(context: android.content.Context, uri: android.net.Uri): String? {
+    var result: String? = null
+    if (uri.scheme == "content") {
+      val cursor = context.contentResolver.query(uri, null, null, null, null)
+      try {
+        if (cursor != null && cursor.moveToFirst()) {
+          val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+          if (index != -1) {
+            result = cursor.getString(index)
+          }
+        }
+      } finally {
+        cursor?.close()
+      }
+    }
+    if (result == null) {
+      result = uri.path
+      val cut = result?.lastIndexOf('/')
+      if (cut != null && cut != -1) {
+        result = result.substring(cut + 1)
+      }
+    }
+    return result
+  }
+
+  // Custom Image/Video/File picker contract
   val imagePickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.GetContent()
   ) { uri: android.net.Uri? ->
     if (uri != null) {
       try {
         val contentResolver = context.contentResolver
+        val mimeType = contentResolver.getType(uri) ?: ""
+        val fileName = getFileName(context, uri) ?: "file"
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+
+        val isImage = mimeType.startsWith("image/") || listOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic").contains(extension)
+        val isVideo = mimeType.startsWith("video/") || listOf("mp4", "mkv", "webm", "3gp", "mov", "avi").contains(extension)
+
+        val mediaType = if (isImage) "image" else if (isVideo) "video" else "unrecognized"
+        val resolvedExt = if (extension.isNotEmpty()) extension else {
+          if (isImage) "png" else if (isVideo) "mp4" else "bin"
+        }
+
         val inputStream = contentResolver.openInputStream(uri)
         if (inputStream != null) {
-          val file = java.io.File(context.filesDir, "custom_pingle_image.png")
+          val file = java.io.File(context.filesDir, "custom_pingle_media.$resolvedExt")
           file.outputStream().use { outputStream ->
             inputStream.use { it.copyTo(outputStream) }
           }
           onCustomImageUriChange(file.absolutePath)
+          viewModel.setCustomMediaType(mediaType)
           onUseCustomImageChange(true)
-          showToast(context, "Custom image updated successfully!")
+
+          if (mediaType == "image") {
+            showToast(context, "Custom image updated successfully!")
+          } else if (mediaType == "video") {
+            showToast(context, "Custom video updated successfully!")
+          } else {
+            showToast(context, "File format not recognized. Displaying Question Mark Pingle!")
+          }
         }
       } catch (e: Exception) {
+        e.printStackTrace()
         onCustomImageUriChange(uri.toString())
+        viewModel.setCustomMediaType("unrecognized")
         onUseCustomImageChange(true)
+        showToast(context, "File chosen. Displaying Question Mark Pingle!")
       }
     }
   }
@@ -150,7 +209,7 @@ fun OptionsScreen(
         .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
       // 1. Tiny Windows Phone style section header
-      androidx.compose.material3.Text(
+      PingleText(
         text = "PINGLESPIN SETTINGS",
         style = TextStyle(
           fontFamily = FontFamily.SansSerif,
@@ -181,7 +240,7 @@ fun OptionsScreen(
           val scale = if (isSelected) 32.sp else 20.sp
           val fontWeight = if (isSelected) FontWeight.Light else FontWeight.ExtraLight
 
-          androidx.compose.material3.Text(
+          PingleText(
             text = tab,
             style = TextStyle(
               fontFamily = FontFamily.SansSerif,
@@ -216,7 +275,7 @@ fun OptionsScreen(
                 .verticalScroll(rememberScrollState()),
               verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
-              // Custom Pingle Image replacement
+              // Custom Pingle Media replacement
               Column(
                 modifier = Modifier
                   .fillMaxWidth()
@@ -224,8 +283,8 @@ fun OptionsScreen(
                   .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
                   .padding(16.dp)
               ) {
-                androidx.compose.material3.Text(
-                  text = "CUSTOM PINGLE IMAGE",
+                PingleText(
+                  text = "CUSTOM PINGLE MEDIA",
                   style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
                     fontSize = 12.sp,
@@ -233,7 +292,16 @@ fun OptionsScreen(
                     color = Color.White,
                     letterSpacing = 1.sp
                   ),
-                  modifier = Modifier.padding(bottom = 8.dp)
+                  modifier = Modifier.padding(bottom = 4.dp)
+                )
+
+                PingleText(
+                  text = "Supports images, videos, and other formats. Unrecognized formats will show a ? pingle.",
+                  style = TextStyle(
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 11.sp
+                  ),
+                  modifier = Modifier.padding(bottom = 12.dp)
                 )
 
                 Row(
@@ -269,8 +337,8 @@ fun OptionsScreen(
                           uncheckedColor = Color.White.copy(alpha = 0.5f)
                         )
                       )
-                      androidx.compose.material3.Text(
-                        text = "Use custom image",
+                      PingleText(
+                        text = "Use custom media",
                         style = TextStyle(color = Color.White, fontSize = 13.sp)
                       )
                     }
@@ -278,11 +346,11 @@ fun OptionsScreen(
                     Box(
                       modifier = Modifier
                         .border(1.dp, Color(0xFF0078D7), RoundedCornerShape(8.dp))
-                        .clickable { imagePickerLauncher.launch("image/*") }
+                        .clickable { imagePickerLauncher.launch("*/*") }
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
-                      androidx.compose.material3.Text(
-                        text = "SELECT IMAGE",
+                      PingleText(
+                        text = "SELECT MEDIA",
                         style = TextStyle(
                           color = Color(0xFF0078D7),
                           fontSize = 11.sp,
@@ -305,7 +373,7 @@ fun OptionsScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
               ) {
                 Column(modifier = Modifier.weight(1f)) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "PINGUI",
                     style = TextStyle(
                       fontFamily = FontFamily.SansSerif,
@@ -316,7 +384,7 @@ fun OptionsScreen(
                     )
                   )
                   Spacer(modifier = Modifier.height(2.dp))
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Adjust sizes, locations & tilts",
                     style = TextStyle(
                       fontFamily = FontFamily.SansSerif,
@@ -333,7 +401,7 @@ fun OptionsScreen(
                     .padding(horizontal = 14.dp, vertical = 6.dp)
                     .testTag("pingui_edit_button")
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "EDIT",
                     style = TextStyle(
                       color = Color(0xFF0078D7),
@@ -352,7 +420,7 @@ fun OptionsScreen(
                   horizontalArrangement = Arrangement.SpaceBetween,
                   verticalAlignment = Alignment.CenterVertically
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "SPIN MULTIPLIER",
                     style = TextStyle(
                       fontFamily = FontFamily.SansSerif,
@@ -362,7 +430,7 @@ fun OptionsScreen(
                       letterSpacing = 1.sp
                     )
                   )
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = String.format(Locale.US, "%.1fx", speed),
                     style = TextStyle(
                       fontFamily = FontFamily.Monospace,
@@ -392,7 +460,7 @@ fun OptionsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "MANUAL DECAY (FRICTION)",
                       style = TextStyle(
                         fontFamily = FontFamily.SansSerif,
@@ -402,7 +470,7 @@ fun OptionsScreen(
                         letterSpacing = 1.sp
                       )
                     )
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = String.format(Locale.US, "%.0f%%", pingleFriction),
                       style = TextStyle(
                         fontFamily = FontFamily.Monospace,
@@ -425,9 +493,179 @@ fun OptionsScreen(
                 }
               }
 
+              // Vibration & Haptics Section
+              Column(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                  .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                  .padding(16.dp)
+              ) {
+                PingleText(
+                  text = "VIBRATION & HAPTICS",
+                  style = TextStyle(
+                    fontFamily = FontFamily.SansSerif,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                    letterSpacing = 1.sp
+                  ),
+                  modifier = Modifier.padding(bottom = 12.dp)
+                )
+
+                // Button Vibration Selector
+                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+                  PingleText(
+                    text = "BUTTON PRESS VIBRATION",
+                    style = TextStyle(
+                      fontFamily = FontFamily.SansSerif,
+                      fontSize = 10.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White.copy(alpha = 0.6f),
+                      letterSpacing = 0.5.sp
+                    ),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                  )
+                  Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                  ) {
+                    val modes = listOf("none" to "OFF", "light" to "SOFT", "medium" to "MEDIUM", "strong" to "STRONG")
+                    modes.forEach { (modeId, label) ->
+                      val isSelected = buttonVibrationMode == modeId
+                      Box(
+                        modifier = Modifier
+                          .weight(1f)
+                          .height(36.dp)
+                          .border(
+                            width = 1.dp,
+                            color = if (isSelected) Color(0xFF0078D7) else Color.White.copy(alpha = 0.15f),
+                            shape = RoundedCornerShape(8.dp)
+                          )
+                          .background(
+                            if (isSelected) Color(0xFF0078D7).copy(alpha = 0.15f) else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp)
+                          )
+                          .clickable {
+                            viewModel.setButtonVibrationMode(modeId)
+                            VibrationHelper.vibrate(context, modeId)
+                          },
+                        contentAlignment = Alignment.Center
+                      ) {
+                        PingleText(
+                          text = label,
+                          style = TextStyle(
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 11.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isSelected) Color(0xFF0078D7) else Color.White.copy(alpha = 0.7f)
+                          )
+                        )
+                      }
+                    }
+                  }
+                }
+
+                if (isManualUnlocked) {
+                  // Spin Vibration Selector
+                  Column(modifier = Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+                    PingleText(
+                      text = "PRINGLE SPIN VIBRATION",
+                      style = TextStyle(
+                        fontFamily = FontFamily.SansSerif,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White.copy(alpha = 0.6f),
+                        letterSpacing = 0.5.sp
+                      ),
+                      modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Row(
+                      modifier = Modifier.fillMaxWidth(),
+                      horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                      val modes = listOf("none" to "OFF", "light" to "SOFT", "medium" to "MEDIUM", "strong" to "STRONG")
+                      modes.forEach { (modeId, label) ->
+                        val isSelected = spinVibrationMode == modeId
+                        Box(
+                          modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .border(
+                              width = 1.dp,
+                              color = if (isSelected) Color(0xFF0078D7) else Color.White.copy(alpha = 0.15f),
+                              shape = RoundedCornerShape(8.dp)
+                            )
+                            .background(
+                              if (isSelected) Color(0xFF0078D7).copy(alpha = 0.15f) else Color.Transparent,
+                              shape = RoundedCornerShape(8.dp)
+                            )
+                            .clickable {
+                              viewModel.setSpinVibrationMode(modeId)
+                              VibrationHelper.vibrate(context, modeId)
+                            },
+                          contentAlignment = Alignment.Center
+                        ) {
+                          PingleText(
+                            text = label,
+                            style = TextStyle(
+                              fontFamily = FontFamily.SansSerif,
+                              fontSize = 11.sp,
+                              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                              color = if (isSelected) Color(0xFF0078D7) else Color.White.copy(alpha = 0.7f)
+                            )
+                          )
+                        }
+                      }
+                    }
+                  }
+
+                  // Spin Vibration Interval
+                  if (spinVibrationMode != "none") {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                      ) {
+                        PingleText(
+                          text = "SPIN VIBRATE INTERVAL",
+                          style = TextStyle(
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White.copy(alpha = 0.6f),
+                            letterSpacing = 0.5.sp
+                          )
+                        )
+                        PingleText(
+                          text = String.format(Locale.US, "Every %.1f°", spinVibrationInterval),
+                          style = TextStyle(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF0078D7)
+                          )
+                        )
+                      }
+                      Slider(
+                        value = spinVibrationInterval,
+                        onValueChange = { viewModel.setSpinVibrationInterval(it) },
+                        valueRange = 5.0f..90.0f,
+                        colors = SliderDefaults.colors(
+                          thumbColor = Color(0xFF0078D7),
+                          activeTrackColor = Color(0xFF0078D7),
+                          inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                        )
+                      )
+                    }
+                  }
+                }
+              }
+
               // Color Tint Selector Row
               Column(modifier = Modifier.fillMaxWidth()) {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "PINGLE COLOR TINT",
                   style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
@@ -460,7 +698,7 @@ fun OptionsScreen(
                       contentAlignment = Alignment.Center
                     ) {
                       if (option.id == "none") {
-                        androidx.compose.material3.Text(
+                        PingleText(
                           text = "∅",
                           style = TextStyle(color = Color.White, fontSize = 14.sp)
                         )
@@ -477,7 +715,24 @@ fun OptionsScreen(
                     modifier = Modifier
                       .size(36.dp)
                       .clip(RoundedCornerShape(8.dp))
-                      .background(Color(pingleCustomColorInt))
+                      .background(
+                        if (isCustomColorUnlocked) {
+                          Brush.sweepGradient(
+                            listOf(
+                              Color(0xFFFF3B30),
+                              Color(0xFFFF9500),
+                              Color(0xFFFFCC00),
+                              Color(0xFF34C759),
+                              Color(0xFF5AC8FA),
+                              Color(0xFF007AFF),
+                              Color(0xFFA252FF),
+                              Color(0xFFFF3B30)
+                            )
+                          )
+                        } else {
+                          Brush.linearGradient(listOf(Color.Gray, Color.DarkGray))
+                        }
+                      )
                       .border(
                         width = if (isSelectedCustom) 2.5.dp else 1.dp,
                         color = if (isSelectedCustom) Color.White else Color.White.copy(alpha = 0.15f),
@@ -499,61 +754,309 @@ fun OptionsScreen(
                         tint = Color.White.copy(alpha = 0.7f),
                         modifier = Modifier.size(14.dp)
                       )
-                    } else if (pingleTintId == "custom") {
-                      Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Selected",
-                        tint = Color.White,
-                        modifier = Modifier.size(16.dp)
+                    } else {
+                      // Center indicator circle of actual chosen custom color
+                      Box(
+                        modifier = Modifier
+                          .size(14.dp)
+                          .clip(androidx.compose.foundation.shape.CircleShape)
+                          .background(Color(pingleCustomColorInt))
+                          .border(1.dp, Color.White.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
                       )
+                      if (isSelectedCustom) {
+                        Icon(
+                          imageVector = Icons.Default.Check,
+                          contentDescription = "Selected",
+                          tint = Color.White,
+                          modifier = Modifier.size(16.dp)
+                        )
+                      }
                     }
                   }
                 }
 
-                // If Custom is selected and unlocked, show the RGB Custom color sliders
+                // If Custom is selected and unlocked, show the chosen color picker view
                 val hoursUnlocked = totalSpinDuration / 3600000L
                 val isCustomColorUnlocked = (hoursUnlocked >= 5) || isManualUnlocked
                 if (pingleTintId == "custom" && isCustomColorUnlocked) {
                   Spacer(modifier = Modifier.height(16.dp))
-                  val redVal = (pingleCustomColorInt shr 16 and 0xFF).toFloat()
-                  val greenVal = (pingleCustomColorInt shr 8 and 0xFF).toFloat()
-                  val blueVal = (pingleCustomColorInt and 0xFF).toFloat()
+                  
+                  when (colorPickerMode) {
+                    "wheel" -> {
+                      HSVColorPicker(
+                        pingleCustomColorInt = pingleCustomColorInt,
+                        onCustomColorChange = onCustomColorChange
+                      )
+                      
+                      Spacer(modifier = Modifier.height(8.dp))
+                      
+                      Button(
+                        onClick = { colorPickerMode = "rgb" },
+                        colors = ButtonDefaults.buttonColors(
+                          containerColor = Color.Transparent,
+                          contentColor = Color(0xFF0078D7)
+                        ),
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .border(1.dp, Color(0xFF0078D7).copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                          .height(44.dp)
+                      ) {
+                        PingleText(
+                          text = "ADVANCED",
+                          style = TextStyle(
+                            fontFamily = FontFamily.SansSerif,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                          )
+                        )
+                      }
+                    }
+                    
+                    "rgb" -> {
+                      val redVal = (pingleCustomColorInt shr 16 and 0xFF).toFloat()
+                      val greenVal = (pingleCustomColorInt shr 8 and 0xFF).toFloat()
+                      val blueVal = (pingleCustomColorInt and 0xFF).toFloat()
 
-                  FancyRGBSlider(
-                    label = "R",
-                    value = redVal,
-                    gradient = Brush.horizontalGradient(listOf(Color.Black, Color.Red)),
-                    thumbColor = Color.Red,
-                    onValueChange = { r ->
-                      val updated = (0xFF shl 24) or (r.toInt() shl 16) or (greenVal.toInt() shl 8) or blueVal.toInt()
-                      onCustomColorChange(updated)
-                    },
-                    valueText = String.format(Locale.US, "%d", redVal.toInt())
-                  )
+                      FancyRGBSlider(
+                        label = "R",
+                        value = redVal,
+                        gradient = Brush.horizontalGradient(listOf(Color.Black, Color.Red)),
+                        thumbColor = Color.Red,
+                        onValueChange = { r ->
+                          val updated = (0xFF shl 24) or (r.toInt() shl 16) or (greenVal.toInt() shl 8) or blueVal.toInt()
+                          onCustomColorChange(updated)
+                        },
+                        valueText = String.format(Locale.US, "%d", redVal.toInt())
+                      )
 
-                  FancyRGBSlider(
-                    label = "G",
-                    value = greenVal,
-                    gradient = Brush.horizontalGradient(listOf(Color.Black, Color.Green)),
-                    thumbColor = Color.Green,
-                    onValueChange = { g ->
-                      val updated = (0xFF shl 24) or (redVal.toInt() shl 16) or (g.toInt() shl 8) or blueVal.toInt()
-                      onCustomColorChange(updated)
-                    },
-                    valueText = String.format(Locale.US, "%d", greenVal.toInt())
-                  )
+                      FancyRGBSlider(
+                        label = "G",
+                        value = greenVal,
+                        gradient = Brush.horizontalGradient(listOf(Color.Black, Color.Green)),
+                        thumbColor = Color.Green,
+                        onValueChange = { g ->
+                          val updated = (0xFF shl 24) or (redVal.toInt() shl 16) or (g.toInt() shl 8) or blueVal.toInt()
+                          onCustomColorChange(updated)
+                        },
+                        valueText = String.format(Locale.US, "%d", greenVal.toInt())
+                      )
 
-                  FancyRGBSlider(
-                    label = "B",
-                    value = blueVal,
-                    gradient = Brush.horizontalGradient(listOf(Color.Black, Color.Blue)),
-                    thumbColor = Color.Blue,
-                    onValueChange = { b ->
-                      val updated = (0xFF shl 24) or (redVal.toInt() shl 16) or (greenVal.toInt() shl 8) or b.toInt()
-                      onCustomColorChange(updated)
-                    },
-                    valueText = String.format(Locale.US, "%d", blueVal.toInt())
-                  )
+                      FancyRGBSlider(
+                        label = "B",
+                        value = blueVal,
+                        gradient = Brush.horizontalGradient(listOf(Color.Black, Color.Blue)),
+                        thumbColor = Color.Blue,
+                        onValueChange = { b ->
+                          val updated = (0xFF shl 24) or (redVal.toInt() shl 16) or (greenVal.toInt() shl 8) or b.toInt()
+                          onCustomColorChange(updated)
+                        },
+                        valueText = String.format(Locale.US, "%d", blueVal.toInt())
+                      )
+                      
+                      Spacer(modifier = Modifier.height(12.dp))
+                      
+                      Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                      ) {
+                        Button(
+                          onClick = { colorPickerMode = "hex" },
+                          colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = Color(0xFF0078D7)
+                          ),
+                          modifier = Modifier
+                            .weight(1f)
+                            .border(1.dp, Color(0xFF0078D7).copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                            .height(44.dp),
+                          contentPadding = PaddingValues(horizontal = 4.dp)
+                        ) {
+                          PingleText(
+                            text = "GIMME THE NERD ONE",
+                            style = TextStyle(
+                              fontFamily = FontFamily.SansSerif,
+                              fontSize = 10.sp,
+                              fontWeight = FontWeight.Bold,
+                              letterSpacing = 0.5.sp
+                            )
+                          )
+                        }
+                        
+                        Button(
+                          onClick = { colorPickerMode = "wheel" },
+                          colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = Color.White.copy(alpha = 0.6f)
+                          ),
+                          modifier = Modifier
+                            .weight(1f)
+                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                            .height(44.dp)
+                        ) {
+                          PingleText(
+                            text = "BACK TO WHEEL",
+                            style = TextStyle(
+                              fontFamily = FontFamily.SansSerif,
+                              fontSize = 10.sp,
+                              fontWeight = FontWeight.Bold,
+                              letterSpacing = 0.5.sp
+                            )
+                          )
+                        }
+                      }
+                    }
+                    
+                    "hex" -> {
+                      var hexInputText by remember(pingleCustomColorInt) {
+                        mutableStateOf(String.format(Locale.US, "%06X", pingleCustomColorInt and 0xFFFFFF))
+                      }
+                      var parseError by remember { mutableStateOf(false) }
+                      
+                      Column(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .padding(vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                      ) {
+                        Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          verticalAlignment = Alignment.CenterVertically,
+                          horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                          Box(
+                            modifier = Modifier
+                              .size(40.dp)
+                              .clip(RoundedCornerShape(8.dp))
+                              .background(Color(pingleCustomColorInt))
+                              .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(8.dp))
+                          )
+                          
+                          OutlinedTextField(
+                            value = hexInputText,
+                            onValueChange = { input ->
+                              val filtered = input.uppercase(Locale.US).filter { it.isLetterOrDigit() }.take(8)
+                              hexInputText = filtered
+                              parseError = false
+                            },
+                            prefix = { Text("#", color = Color.White.copy(alpha = 0.5f)) },
+                            placeholder = { Text("RRGGBB", color = Color.White.copy(alpha = 0.3f)) },
+                            singleLine = true,
+                            isError = parseError,
+                            colors = OutlinedTextFieldDefaults.colors(
+                              focusedTextColor = Color.White,
+                              unfocusedTextColor = Color.White,
+                              focusedBorderColor = Color(0xFF0078D7),
+                              unfocusedBorderColor = Color.White.copy(alpha = 0.15f),
+                              errorBorderColor = Color.Red,
+                              cursorColor = Color(0xFF0078D7)
+                            ),
+                            textStyle = TextStyle(
+                              fontFamily = FontFamily.Monospace,
+                              fontSize = 14.sp,
+                              fontWeight = FontWeight.Bold
+                            ),
+                            modifier = Modifier.weight(1f)
+                          )
+                        }
+                        
+                        if (parseError) {
+                          PingleText(
+                            text = "Invalid hex code! Must be 6 or 8 digits (AARRGGBB).",
+                            style = TextStyle(color = Color.Red, fontSize = 11.sp)
+                          )
+                        }
+                        
+                        Row(
+                          modifier = Modifier.fillMaxWidth(),
+                          horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                          Button(
+                            onClick = {
+                              val clean = hexInputText.trim()
+                              val parsed = try {
+                                if (clean.length == 6) {
+                                  (0xFF shl 24) or clean.toLong(16).toInt()
+                                } else if (clean.length == 8) {
+                                  clean.toLong(16).toInt()
+                                } else {
+                                  null
+                                }
+                              } catch (e: Exception) {
+                                null
+                              }
+                              if (parsed != null) {
+                                onCustomColorChange(parsed)
+                                showToast(context, "Hex color applied successfully!")
+                              } else {
+                                parseError = true
+                              }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                              containerColor = Color(0xFF0078D7),
+                              contentColor = Color.White
+                            ),
+                            modifier = Modifier
+                              .weight(1f)
+                              .height(44.dp)
+                          ) {
+                            PingleText(
+                              text = "APPLY HEX",
+                              style = TextStyle(
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                              )
+                            )
+                          }
+                          
+                          Button(
+                            onClick = { colorPickerMode = "rgb" },
+                            colors = ButtonDefaults.buttonColors(
+                              containerColor = Color.Transparent,
+                              contentColor = Color.White.copy(alpha = 0.6f)
+                            ),
+                            modifier = Modifier
+                              .weight(1f)
+                              .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(8.dp))
+                              .height(44.dp)
+                          ) {
+                            PingleText(
+                              text = "BACK TO SLIDERS",
+                              style = TextStyle(
+                                fontFamily = FontFamily.SansSerif,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                              )
+                            )
+                          }
+                        }
+                        
+                        Button(
+                          onClick = { colorPickerMode = "wheel" },
+                          colors = ButtonDefaults.buttonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = Color.White.copy(alpha = 0.4f)
+                          ),
+                          modifier = Modifier
+                            .fillMaxWidth()
+                            .height(36.dp)
+                        ) {
+                          PingleText(
+                            text = "BACK TO COLOR WHEEL",
+                            style = TextStyle(
+                              fontFamily = FontFamily.SansSerif,
+                              fontSize = 9.sp,
+                              fontWeight = FontWeight.Medium,
+                              letterSpacing = 0.5.sp
+                            )
+                          )
+                        }
+                      }
+                    }
+                  }
                 }
               }
 
@@ -565,7 +1068,7 @@ fun OptionsScreen(
                   .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
                   .padding(16.dp)
               ) {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "SPOTIFY SOUNDTRACKS",
                   style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
@@ -592,7 +1095,7 @@ fun OptionsScreen(
                       tint = Color.White.copy(alpha = 0.5f),
                       modifier = Modifier.size(16.dp)
                     )
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "Unlocked at 10 minutes total spin time!",
                       style = TextStyle(color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp)
                     )
@@ -604,7 +1107,7 @@ fun OptionsScreen(
                       horizontalArrangement = Arrangement.SpaceBetween,
                       verticalAlignment = Alignment.CenterVertically
                     ) {
-                      androidx.compose.material3.Text(
+                      PingleText(
                         text = "Status: CONNECTED",
                         style = TextStyle(color = Color(0xFF1DB954), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                       )
@@ -614,7 +1117,7 @@ fun OptionsScreen(
                           .clickable { spotifyManager.disconnect() }
                           .padding(horizontal = 12.dp, vertical = 6.dp)
                       ) {
-                        androidx.compose.material3.Text(
+                        PingleText(
                           text = "LOGOUT",
                           style = TextStyle(color = Color.Red, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         )
@@ -629,7 +1132,7 @@ fun OptionsScreen(
                           .clickable { showAuthWebView = true }
                           .padding(horizontal = 16.dp, vertical = 8.dp)
                       ) {
-                        androidx.compose.material3.Text(
+                        PingleText(
                           text = "CONNECT SPOTIFY ACCOUNT",
                           style = TextStyle(color = Color(0xFF1DB954), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         )
@@ -684,7 +1187,8 @@ fun OptionsScreen(
             Column(
               modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
               verticalArrangement = Arrangement.spacedBy(20.dp)
             ) {
               if (isFoldableDevice()) {
@@ -694,7 +1198,7 @@ fun OptionsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "FOLD THRESHOLD ANGLE",
                       style = TextStyle(
                         fontFamily = FontFamily.SansSerif,
@@ -704,7 +1208,7 @@ fun OptionsScreen(
                         letterSpacing = 1.sp
                       )
                     )
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = String.format(Locale.US, "%.0f°", foldAngleThreshold),
                       style = TextStyle(
                         fontFamily = FontFamily.Monospace,
@@ -724,30 +1228,59 @@ fun OptionsScreen(
                       inactiveTrackColor = Color.White.copy(alpha = 0.2f)
                     )
                   )
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "Adjust the degree threshold to calibrate fold recognition for manual or automated modes.",
                     style = TextStyle(color = Color.White.copy(alpha = 0.5f), fontSize = 11.sp),
                     modifier = Modifier.padding(top = 4.dp)
                   )
                 }
-              } else {
-                Box(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 40.dp),
-                  contentAlignment = Alignment.Center
-                ) {
-                  androidx.compose.material3.Text(
-                    text = "no features currently available",
+              }
+
+              // "Load Everything" preloading option
+              Row(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+                  .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
+                  .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+              ) {
+                Column(modifier = Modifier.weight(1f)) {
+                  PingleText(
+                    text = "LOAD EVERYTHING",
                     style = TextStyle(
                       fontFamily = FontFamily.SansSerif,
-                      fontSize = 16.sp,
-                      fontWeight = FontWeight.ExtraLight,
-                      color = Color.White.copy(alpha = 0.4f),
+                      fontSize = 12.sp,
+                      fontWeight = FontWeight.Bold,
+                      color = Color.White,
                       letterSpacing = 1.sp
                     )
                   )
+                  Spacer(modifier = Modifier.height(2.dp))
+                  PingleText(
+                    text = "Pre-load and cache every asset into RAM to completely eliminate load times. Defaults to optimized streaming.",
+                    style = TextStyle(
+                      fontFamily = FontFamily.SansSerif,
+                      fontSize = 11.sp,
+                      color = Color.White.copy(alpha = 0.5f)
+                    )
+                  )
                 }
+
+                androidx.compose.material3.Switch(
+                  checked = loadEverythingState,
+                  onCheckedChange = { checked ->
+                    val success = viewModel.setLoadEverything(checked, context)
+                    if (!success) {
+                      showToast(context, "Sorry not enough RAM for this one buddy")
+                    }
+                  },
+                  colors = androidx.compose.material3.SwitchDefaults.colors(
+                    checkedThumbColor = Color(0xFF0078D7),
+                    checkedTrackColor = Color(0xFF0078D7).copy(alpha = 0.5f)
+                  )
+                )
               }
             }
           }
@@ -778,7 +1311,7 @@ fun OptionsScreen(
                   horizontalAlignment = Alignment.CenterHorizontally,
                   verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "ENTER SECRET CODE",
                     style = TextStyle(
                       fontFamily = FontFamily.SansSerif,
@@ -792,8 +1325,8 @@ fun OptionsScreen(
                   androidx.compose.material3.OutlinedTextField(
                     value = codeInputText,
                     onValueChange = { codeInputText = it },
-                    label = { androidx.compose.material3.Text("Secret Code") },
-                    placeholder = { androidx.compose.material3.Text("Enter code...") },
+                    label = { PingleText("Secret Code") },
+                    placeholder = { PingleText("Enter code...") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                       focusedBorderColor = Color.White,
@@ -811,21 +1344,15 @@ fun OptionsScreen(
                   Button(
                     onClick = {
                       val cleanInput = codeInputText.trim()
-                      if (cleanInput.equals("Pride", ignoreCase = true)) {
-                        viewModel.setRainbowNeonUnlocked(true)
-                        viewModel.setEasterRainbowNeon(true)
-                        showToast(context, "Pride code activated! Rainbow tint unlocked and enabled.")
+                      if (cleanInput.equals("heavenischinese", ignoreCase = true) ||
+                          cleanInput.equals("futureischinese", ignoreCase = true) ||
+                          cleanInput.equals("idahoischinese", ignoreCase = true)) {
+                        viewModel.triggerChineseCrash()
+                        showToast(context, "游戏崩溃！")
                         codeInputText = ""
-                      } else if (cleanInput.isEmpty()) {
-                        blankCount++
-                        if (blankCount == 1) {
-                          showToast(context, "dude type something in")
-                        } else if (blankCount == 2) {
-                          showToast(context, "dawg there isn't anything here")
-                        } else {
-                          viewModel.setInvisiblePingleEnabled(true)
-                          showToast(context, "Invisible pingle unlocked! It's gone, and you can collect any time.")
-                        }
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                          (context as? android.app.Activity)?.finishAffinity()
+                        }, 1000)
                       } else {
                         showToast(context, "Unknown code!")
                       }
@@ -840,7 +1367,7 @@ fun OptionsScreen(
                       .testTag("secret_code_enter_button")
                       .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(10.dp))
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "ENTER",
                       style = TextStyle(
                         fontFamily = FontFamily.SansSerif,
@@ -851,130 +1378,6 @@ fun OptionsScreen(
                     )
                   }
                 }
-              }
-
-              androidx.compose.material3.Text(
-                text = "YOUR UNLOCKED EGGS",
-                style = TextStyle(
-                  fontFamily = FontFamily.SansSerif,
-                  fontSize = 11.sp,
-                  fontWeight = FontWeight.Bold,
-                  color = Color.White.copy(alpha = 0.6f),
-                  letterSpacing = 1.sp
-                )
-              )
-
-              // Row helper for Easter egg item
-              @Composable
-              fun EasterEggItem(
-                title: String,
-                desc: String,
-                isUnlocked: Boolean,
-                isEnabled: Boolean,
-                onCheckedChange: (Boolean) -> Unit
-              ) {
-                Row(
-                  modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-                    .background(Color.White.copy(alpha = 0.03f), RoundedCornerShape(12.dp))
-                    .padding(16.dp),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                  Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                      androidx.compose.material3.Text(
-                        text = title,
-                        style = TextStyle(
-                          color = if (isUnlocked) Color.White else Color.White.copy(alpha = 0.4f),
-                          fontSize = 14.sp,
-                          fontWeight = FontWeight.Bold
-                        )
-                      )
-                      if (!isUnlocked) {
-                        Icon(
-                          imageVector = Icons.Default.Lock,
-                          contentDescription = "Locked",
-                          tint = Color.White.copy(alpha = 0.4f),
-                          modifier = Modifier.size(12.dp)
-                        )
-                      }
-                    }
-                    androidx.compose.material3.Text(
-                      text = desc,
-                      style = TextStyle(
-                        color = Color.White.copy(alpha = 0.5f),
-                        fontSize = 11.sp
-                      ),
-                      modifier = Modifier.padding(top = 2.dp)
-                    )
-                  }
-
-                  if (isUnlocked) {
-                    androidx.compose.material3.Switch(
-                      checked = isEnabled,
-                      onCheckedChange = onCheckedChange,
-                      colors = androidx.compose.material3.SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = Color(0xFF0078D7)
-                      )
-                    )
-                  }
-                }
-              }
-
-              if (isReverseSpinUnlocked) {
-                EasterEggItem(
-                  title = "Reverse Spin direction",
-                  desc = "Unlock condition: Spin for 15 seconds in a single run.",
-                  isUnlocked = isReverseSpinUnlocked,
-                  isEnabled = easterReverseSpin,
-                  onCheckedChange = onEasterReverseSpinChange
-                )
-              }
-
-              if (isMatrixBgUnlocked) {
-                EasterEggItem(
-                  title = "Matrix rain background",
-                  desc = "Unlock condition: Spin for 30 seconds in a single run.",
-                  isUnlocked = isMatrixBgUnlocked,
-                  isEnabled = easterMatrixBg,
-                  onCheckedChange = onEasterMatrixBgChange
-                )
-              }
-
-              if (isRainbowNeonUnlocked) {
-                EasterEggItem(
-                  title = "Rainbow neon Pingle cycling",
-                  desc = "Unlock condition: Reach 1 minute of cumulative total spin time.",
-                  isUnlocked = isRainbowNeonUnlocked,
-                  isEnabled = easterRainbowNeon,
-                  onCheckedChange = onEasterRainbowNeonChange
-                )
-              }
-
-              if (isSpaceStarsUnlocked) {
-                EasterEggItem(
-                  title = "Cosmic starfield background",
-                  desc = "Unlock condition: Reach 5 minutes of cumulative total spin time.",
-                  isUnlocked = isSpaceStarsUnlocked,
-                  isEnabled = easterSpaceStars,
-                  onCheckedChange = onEasterSpaceStarsChange
-                )
-              }
-
-              if (blankCount >= 3 || invisiblePingleEnabledState) {
-                EasterEggItem(
-                  title = "Invisible Pingle",
-                  desc = "Secret code unlock: Pingle is completely hidden.",
-                  isUnlocked = true,
-                  isEnabled = invisiblePingleEnabledState,
-                  onCheckedChange = { viewModel.setInvisiblePingleEnabled(it) }
-                )
               }
             }
           }
@@ -1008,7 +1411,7 @@ fun OptionsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "PASSWORD PROTECTION",
                       style = TextStyle(
                         fontFamily = FontFamily.SansSerif,
@@ -1029,7 +1432,7 @@ fun OptionsScreen(
                         tint = if (isDebugUnlocked) Color.Green else Color.Red,
                         modifier = Modifier.size(20.dp)
                       )
-                      androidx.compose.material3.Text(
+                      PingleText(
                         text = if (isDebugUnlocked) "UNLOCKED" else "LOCKED",
                         style = TextStyle(
                           fontSize = 11.sp,
@@ -1045,8 +1448,8 @@ fun OptionsScreen(
                     onValueChange = { newValue ->
                       passwordInput = newValue
                     },
-                    label = { androidx.compose.material3.Text("Password") },
-                    placeholder = { androidx.compose.material3.Text("Enter password") },
+                    label = { PingleText("Password") },
+                    placeholder = { PingleText("Enter password") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                       focusedBorderColor = if (isDebugUnlocked) Color.Green else Color.Red,
@@ -1090,7 +1493,7 @@ fun OptionsScreen(
                         shape = RoundedCornerShape(10.dp)
                       )
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = if (isDebugUnlocked) "LOCK DEBUG" else "ENTER",
                       style = TextStyle(
                         fontFamily = FontFamily.SansSerif,
@@ -1104,7 +1507,7 @@ fun OptionsScreen(
               }
 
               if (isDebugUnlocked) {
-                androidx.compose.material3.Text(
+                PingleText(
                   text = "DEVELOPER COMMANDS",
                   style = TextStyle(
                     fontFamily = FontFamily.SansSerif,
@@ -1124,7 +1527,7 @@ fun OptionsScreen(
                     .padding(14.dp),
                   verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "FORCE UNLOCK OVERRIDES",
                     style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                   )
@@ -1143,7 +1546,7 @@ fun OptionsScreen(
                       horizontalArrangement = Arrangement.SpaceBetween,
                       verticalAlignment = Alignment.CenterVertically
                     ) {
-                      androidx.compose.material3.Text(
+                      PingleText(
                         text = label,
                         style = TextStyle(color = Color.White.copy(alpha = 0.8f), fontSize = 12.sp)
                       )
@@ -1158,7 +1561,7 @@ fun OptionsScreen(
                           .clickable { action() }
                           .padding(horizontal = 10.dp, vertical = 4.dp)
                       ) {
-                        androidx.compose.material3.Text(
+                        PingleText(
                           text = if (flow) "UNLOCKED" else "LOCK",
                           style = TextStyle(
                             color = if (flow) Color.Green else Color.Red,
@@ -1180,7 +1583,7 @@ fun OptionsScreen(
                     .padding(14.dp),
                   verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "CUSTOM SCORE CREATOR (RED WATERMARK)",
                     style = TextStyle(color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                   )
@@ -1192,11 +1595,11 @@ fun OptionsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "Duration to add:",
                       style = TextStyle(color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
                     )
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = formatDuration((debugScoreSeconds * 1000).toLong()),
                       style = TextStyle(color = Color.Red, fontSize = 12.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold)
                     )
@@ -1224,7 +1627,7 @@ fun OptionsScreen(
                       .padding(vertical = 12.dp),
                     contentAlignment = Alignment.Center
                   ) {
-                    androidx.compose.material3.Text(
+                    PingleText(
                       text = "CREATE DEBUG SCORE",
                       style = TextStyle(color = Color.Red, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     )
@@ -1243,7 +1646,7 @@ fun OptionsScreen(
                     .padding(vertical = 12.dp),
                   contentAlignment = Alignment.Center
                 ) {
-                  androidx.compose.material3.Text(
+                  PingleText(
                     text = "RESET ALL SCORES",
                     style = TextStyle(color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                   )
@@ -1259,7 +1662,7 @@ fun OptionsScreen(
                 .padding(bottom = 40.dp),
               contentAlignment = Alignment.Center
             ) {
-              androidx.compose.material3.Text(
+              PingleText(
                 text = "COMING SOON MAN",
                 style = TextStyle(
                   fontFamily = FontFamily.SansSerif,
@@ -1282,11 +1685,14 @@ fun OptionsScreen(
           .height(52.dp)
           .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
           .background(Color.White.copy(alpha = 0.05f), RoundedCornerShape(12.dp))
-          .clickable { onBackClicked() }
+          .clickable {
+            VibrationHelper.vibrate(context, buttonVibrationMode)
+            onBackClicked()
+          }
           .testTag("save_back_button"),
         contentAlignment = Alignment.Center
       ) {
-        androidx.compose.material3.Text(
+        PingleText(
           text = "SAVE & BACK",
           style = TextStyle(
             fontFamily = FontFamily.SansSerif,
@@ -1295,6 +1701,186 @@ fun OptionsScreen(
             color = Color.White,
             letterSpacing = 2.sp
           )
+        )
+      }
+    }
+  }
+}
+
+@Composable
+fun HSVColorPicker(
+  pingleCustomColorInt: Int,
+  onCustomColorChange: (Int) -> Unit,
+  modifier: Modifier = Modifier
+) {
+  var hue by remember(pingleCustomColorInt) {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(pingleCustomColorInt, hsv)
+    mutableStateOf(hsv[0])
+  }
+  var saturation by remember(pingleCustomColorInt) {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(pingleCustomColorInt, hsv)
+    mutableStateOf(hsv[1])
+  }
+  var value by remember(pingleCustomColorInt) {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(pingleCustomColorInt, hsv)
+    mutableStateOf(hsv[2])
+  }
+
+  val updateColor = { h: Float, s: Float, v: Float ->
+    hue = h
+    saturation = s
+    value = v
+    val updatedColor = android.graphics.Color.HSVToColor(floatArrayOf(h, s, v))
+    onCustomColorChange(updatedColor)
+  }
+
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .padding(vertical = 12.dp),
+    horizontalArrangement = Arrangement.Center,
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    // Brightness bar (Vertical slider) on left
+    val brightnessBarWidth = 32.dp
+    val brightnessBarHeight = 180.dp
+    
+    Box(
+      modifier = Modifier
+        .width(brightnessBarWidth)
+        .height(brightnessBarHeight)
+        .clip(RoundedCornerShape(6.dp))
+        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(6.dp))
+        .pointerInput(hue, saturation) {
+          detectTapGestures { offset ->
+            val v = (1f - (offset.y / size.height)).coerceIn(0f, 1f)
+            updateColor(hue, saturation, v)
+          }
+        }
+        .pointerInput(hue, saturation) {
+          detectDragGestures { change, _ ->
+            change.consume()
+            val v = (1f - (change.position.y / size.height)).coerceIn(0f, 1f)
+            updateColor(hue, saturation, v)
+          }
+        }
+    ) {
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        val topColor = Color(android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, 1f)))
+        val brush = Brush.verticalGradient(listOf(topColor, Color.Black))
+        drawRect(brush = brush)
+        
+        val y = (1f - value) * size.height
+        drawLine(
+          color = Color.White,
+          start = Offset(0f, y),
+          end = Offset(size.width, y),
+          strokeWidth = 3.dp.toPx()
+        )
+        drawLine(
+          color = Color.Black,
+          start = Offset(0f, y),
+          end = Offset(size.width, y),
+          strokeWidth = 1.dp.toPx()
+        )
+      }
+    }
+
+    Spacer(modifier = Modifier.width(36.dp))
+
+    // Color Wheel on right
+    val wheelSize = 180.dp
+    Box(
+      modifier = Modifier
+        .size(wheelSize)
+        .pointerInput(value) {
+          detectTapGestures { offset ->
+            val centerX = size.width / 2f
+            val centerY = size.height / 2f
+            val dx = offset.x - centerX
+            val dy = offset.y - centerY
+            val radius = size.width / 2f
+            
+            var angleRad = Math.atan2(dy.toDouble(), dx.toDouble()).toFloat()
+            if (angleRad < 0) {
+              angleRad += (2 * Math.PI).toFloat()
+            }
+            val h = (angleRad * 180f / Math.PI).toFloat()
+            val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+            val s = (dist / radius).coerceIn(0f, 1f)
+            updateColor(h, s, value)
+          }
+        }
+        .pointerInput(value) {
+          detectDragGestures { change, _ ->
+            change.consume()
+            val centerX = size.width / 2f
+            val centerY = size.height / 2f
+            val dx = change.position.x - centerX
+            val dy = change.position.y - centerY
+            val radius = size.width / 2f
+            
+            var angleRad = Math.atan2(dy.toDouble(), dx.toDouble()).toFloat()
+            if (angleRad < 0) {
+              angleRad += (2 * Math.PI).toFloat()
+            }
+            val h = (angleRad * 180f / Math.PI).toFloat()
+            val dist = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+            val s = (dist / radius).coerceIn(0f, 1f)
+            updateColor(h, s, value)
+          }
+        }
+    ) {
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        val centerX = size.width / 2f
+        val centerY = size.height / 2f
+        val radius = size.width / 2f
+
+        // 1. Draw sweep gradient of Hue
+        val hueColors = listOf(
+          Color.Red, Color.Yellow, Color.Green, Color.Cyan, Color.Blue, Color.Magenta, Color.Red
+        )
+        drawCircle(
+          brush = Brush.sweepGradient(hueColors, center = Offset(centerX, centerY)),
+          radius = radius,
+          center = Offset(centerX, centerY)
+        )
+
+        // 2. Draw radial gradient of Saturation (White in center, Transparent at edge)
+        drawCircle(
+          brush = Brush.radialGradient(
+            colors = listOf(Color.White, Color.Transparent),
+            center = Offset(centerX, centerY),
+            radius = radius
+          ),
+          radius = radius,
+          center = Offset(centerX, centerY)
+        )
+
+        // 3. Draw current selection circle handle
+        val handleAngleRad = (hue * Math.PI / 180f).toFloat()
+        val handleDist = saturation * radius
+        val handleX = centerX + handleDist * Math.cos(handleAngleRad.toDouble()).toFloat()
+        val handleY = centerY + handleDist * Math.sin(handleAngleRad.toDouble()).toFloat()
+
+        drawCircle(
+          color = Color.White,
+          radius = 8.dp.toPx(),
+          center = Offset(handleX, handleY)
+        )
+        drawCircle(
+          color = Color.Black,
+          radius = 8.dp.toPx(),
+          center = Offset(handleX, handleY),
+          style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5.dp.toPx())
+        )
+        drawCircle(
+          color = Color.Red,
+          radius = 3.dp.toPx(),
+          center = Offset(handleX, handleY)
         )
       }
     }
