@@ -1,7 +1,1 @@
-pinglespin+ : pinglespin but with more features that isnt available on the regular version
-UPDATE: add videos instead of pictures
- Pinglespin +
-
-
-
-[![🎡 Click Here to Spin Now](https://img.shields.io/badge/🎡-Click%20Here%20to%20Spin%20Now-00C853?style=for-the-badge)](https://github.com/vinayanmahesan/pinglespinbeta/releases/latest/download/pinglespin-apk.apk)
+to download : [Click here](https://github.com/pinglespinbeta/releases)   then clcik the top release and scroll until you see an apk file and click it and the apk should download (please note that on some android phones the phone will ask to send the app to google play to check its security so just send it)
